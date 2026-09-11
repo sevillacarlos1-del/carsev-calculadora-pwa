@@ -7,7 +7,7 @@
  *   · Cross-origin (CDNs)  → Cache-First con revalidación en segundo plano
  * ============================================================ */
 
-const CACHE_NAME = 'carsev-v1.0.0';
+const CACHE_NAME = 'carsev-v2.0.0';
 
 const PRECACHE_URLS = [
   './',
