@@ -12,50 +12,29 @@
   "lang": "es",
   "dir": "ltr",
   "categories": ["productivity", "utilities", "business"],
-  "icons": [
+ "icons": [
     {
-      "src": "./icons/icon.svg",
+      "src": "./icons/icon-180.png",
       "sizes": "180x180",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./icons/icon.svg",
+      "src": "./icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./icons/icon.svg",
+      "src": "./icons/icon-500.png",
       "sizes": "500x500",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icons.//icon.svg",
+      "src": "./icons/icon-512.png",
       "sizes": "512x512",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
-    },
-    {
-      "src": "./icons/icon.svg",
-      "sizes": "512x512",
-      "type": "image/svg+xml",
-      "purpose": "maskable"
-    }
-  ],
-  "shortcuts": [
-    {
-      "name": "Dosificación rápida",
-      "short_name": "Dosificar",
-      "url": "./index.html#dosificacion",
-      "icons": [{ "src": "icons/icon.svg", "sizes": "192x192", "type": "image/svg+xml" }]
-    },
-    {
-      "name": "Recetas guardadas",
-      "short_name": "Recetas",
-      "url": "./index.html#recetas",
-      "icons": [{ "src": "icons/icon.svg", "sizes": "192x192", "type": "image/svg+xml" }]
     }
   ]
-}
