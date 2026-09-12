@@ -14,25 +14,25 @@
   "categories": ["productivity", "utilities", "business"],
  "icons": [
     {
-      "src": "./icons/icon-180.png",
+      "src": "./icons/icon-192-v2.png",
       "sizes": "180x180",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./icons/icon-192.png",
+      "src": "./icons/icon-192-v2.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./icons/icon-500.png",
+      "src": "./icons/icon-192-v2.png",
       "sizes": "500x500",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./icons/icon-512.png",
+      "src": "./icons/icon-192-v2.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"

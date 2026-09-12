@@ -13,18 +13,11 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.json',
-  './icons/icon-180.png',
-  './icons/icon-192.png',
-  './icons/icon-500.png',
-  './icons/icon-512.png',
+  './icons/icon-192-v2.png',
   './js/calculator.js',
   './js/storage.js',
-  './js/app.js',
-  'https://cdn.tailwindcss.com',
-  'https://unpkg.com/lucide@latest',
-  'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap'
-];
-/* ---------- INSTALL: precache tolerante ---------- */
+  './js/app.js'
+];/* ---------- INSTALL: precache tolerante ---------- */
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
