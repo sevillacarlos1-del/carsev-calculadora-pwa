@@ -395,7 +395,7 @@
           <span class="font-mono text-4xl font-semibold text-slate-800 leading-none select-none">02</span>
           <div>
             <h2 class="text-xl font-bold text-slate-100">Módulo de Tapas · Cubaje y Masa</h2>
-            <p class="text-sm text-slate-500 mt-0.5">Volumen neto por tapa (sellada o con ranuras ovaladas concéntricas), masa por pieza y totalizador de lote.</p>
+            <p class="text-sm text-slate-500 mt-0.5">Volumen neto por tapa (sellada o con ranuras ovaladas radiales controladas), masa por pieza y totalizador de lote.</p>
           </div>
         </div>
 
@@ -420,7 +420,7 @@
                   </div>
                 </label>
               </div>
-              <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">La tapa sellada conserva el cálculo original. Con huecos, se colan ranuras ovaladas curvas (cápsulas en arco) concéntricas con la tapa; su volumen se descuenta del cubaje.</p>
+              <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">La tapa sellada conserva el cálculo original. Con huecos, se colan ranuras ovaladas curvas (cápsulas en arco) posicionadas radialmente por el operador.</p>
             </div>
 
             <!-- 2 · Geometría del molde -->
@@ -448,7 +448,7 @@
               </div>
             </div>
 
-            <!-- Ranuras ovaladas curvas (4 a 12) con cálculo automático del arco -->
+            <!-- Ranuras ovaladas curvas (4 a 12) con radio central controlado -->
             <div id="holesBox" class="hidden space-y-4 border border-slate-800 rounded-xl p-4 bg-slate-950/40">
               <div>
                 <label class="block text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500 mb-2.5">Cantidad de ranuras curvas <span class="normal-case tracking-normal text-slate-600 font-normal">(4 a 12)</span></label>
@@ -465,11 +465,26 @@
                 </div>
               </div>
 
-              <div class="max-w-[180px]">
-                <label for="inSlotW" class="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 mb-2">Ancho de ranura (mm)</label>
-                <input id="inSlotW" type="number" min="0.1" step="any" inputmode="decimal" value="10"
-                  class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 font-mono tnum text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors" />
+              <!-- Control radial independiente: ancho + radio central -->
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label for="inSlotW" class="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 mb-2">Ancho de ranura (mm)</label>
+                  <input id="inSlotW" type="number" min="0.1" step="any" inputmode="decimal" value="15"
+                    class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 font-mono tnum text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors" />
+                </div>
+                <div>
+                  <label for="inSlotR" class="block text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-400 mb-2">
+                    <span class="flex items-center gap-1.5"><i data-lucide="crosshair" class="w-3.5 h-3.5"></i> Radio central de ranura (mm)</span>
+                  </label>
+                  <input id="inSlotR" type="number" min="0.1" step="any" inputmode="decimal" value="60"
+                    class="w-full bg-slate-950 border border-cyan-600/50 rounded-xl px-3 py-2.5 font-mono tnum text-cyan-200 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-500/40 transition-colors" />
+                </div>
               </div>
+              <p class="text-[11px] text-slate-600 leading-relaxed -mt-1">
+                <strong class="text-slate-500">Radio central</strong> = distancia del centro de la tapa al eje del canal.
+                Ajústalo para alinear la ranura con el cilindro interno del filtro (ej. cilindro Ø120 mm → radio 60 mm),
+                pegarla al borde externo o al centro. La app valida el rango permitido según Ø y ancho.
+              </p>
 
               <!-- Cálculo automático del arco (sin campos manuales de ángulo) -->
               <div class="border border-slate-800 rounded-xl overflow-hidden">
@@ -493,7 +508,7 @@
                     <span class="text-cyan-300 font-semibold"><span id="outEffDeg">54.0</span>°</span>
                   </div>
                   <div class="flex justify-between gap-2">
-                    <span class="text-slate-500">Arco de centro (Rm)</span>
+                    <span class="text-slate-500">Arco de centro (R)</span>
                     <span class="text-slate-300"><span id="outArcLen">—</span></span>
                   </div>
                   <div class="flex justify-between gap-2">
@@ -508,10 +523,10 @@
               </div>
 
               <p class="text-[11px] text-slate-600 leading-relaxed">
-                Ranuras ovaladas concéntricas (cápsulas en arco) con extremos semicirculares, trazadas sobre el radio
-                medio Rm del anillo y a ancho constante w. La app divide 360° entre el número de ranuras y descuenta el
-                nervio estándar (6°) para la apertura punta-a-punta. Descuento exacto:
-                A = θ<sub>c</sub>·Rm·w + π·(w/2)², con θ<sub>c</sub> = θ<sub>eff</sub> − 2·arcsen(w/2Rm); V = A · H · N.
+                Ranuras ovaladas concéntricas (cápsulas en arco) con extremos semicirculares, de ancho constante w,
+                trazadas sobre el radio central R que define el operador. La app divide 360° entre el número de ranuras
+                y descuenta el nervio estándar (6°) para la apertura punta-a-punta. Descuento exacto:
+                A = θ<sub>c</sub>·R·w + π·(w/2)², con θ<sub>c</sub> = θ<sub>eff</sub> − 2·arcsen(w/2R); V = A · H · N.
               </p>
             </div>
 
@@ -520,12 +535,12 @@
               <div class="grid grid-cols-3 gap-3">
                 <div>
                   <label for="inOuterD" class="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 mb-2">Ø Exterior</label>
-                  <input id="inOuterD" type="number" min="0" step="any" inputmode="decimal" value="160"
+                  <input id="inOuterD" type="number" min="0" step="any" inputmode="decimal" value="300"
                     class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 font-mono tnum text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors" />
                 </div>
                 <div id="inInnerDWrap">
-                  <label for="inInnerD" class="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 mb-2">Ø Interior</label>
-                  <input id="inInnerD" type="number" min="0" step="any" inputmode="decimal" value="80"
+                  <label for="inInnerD" class="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 mb-2">Ø Interior (centro)</label>
+                  <input id="inInnerD" type="number" min="0" step="any" inputmode="decimal" value="30"
                     class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 font-mono tnum text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors" />
                 </div>
                 <div>
@@ -573,14 +588,14 @@
               <div class="grid grid-cols-2 gap-4">
                 <div>
                   <span class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500">Volumen neto de cavidad</span>
-                  <p class="font-mono tnum text-3xl font-semibold text-slate-100 mt-1"><span id="outVolume">452.4</span><span class="text-sm text-slate-500 ml-1">cm³</span></p>
+                  <p class="font-mono tnum text-3xl font-semibold text-slate-100 mt-1"><span id="outVolume">—</span><span class="text-sm text-slate-500 ml-1">cm³</span></p>
                   <p id="volBreakdown" class="hidden font-mono text-[11px] text-slate-500 mt-2 tnum">
                     bruto <span id="outVolGross">—</span> <span id="outVolHoles">—</span> cm³
                   </p>
                 </div>
                 <div class="sm:text-right">
                   <span class="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500">Masa por tapa</span>
-                  <p class="font-mono tnum text-3xl font-semibold text-cyan-300 mt-1"><span id="outPieceMass">520.2</span><span class="text-sm text-cyan-500/70 ml-1">g</span></p>
+                  <p class="font-mono tnum text-3xl font-semibold text-cyan-300 mt-1"><span id="outPieceMass">—</span><span class="text-sm text-cyan-500/70 ml-1">g</span></p>
                 </div>
               </div>
               <button id="btnUseMass" class="mt-5 w-full flex items-center justify-center gap-2 text-sm font-semibold py-3 rounded-xl bg-cyan-500/10 border border-cyan-600/50 text-cyan-400 hover:bg-cyan-500/20 transition-colors">
@@ -824,10 +839,10 @@
           <i data-lucide="triangle-alert" class="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500/70"></i>
           <span>
             <strong class="text-slate-500">Nota técnica:</strong> el valor Shore A mostrado es una interpolación referencial;
-            la dureza real depende del índice NCO, temperatura y curado. Las ranuras curvas se descuentan como cápsulas
-            concéntricas de ancho constante: A = θc·Rm·w + π·(w/2)²; V = A·H·N, con nervio estándar de 6° por ranura.
-            El isocianato es un sensitizador respiratorio: manipular con EPP completo en área ventilada. Validar toda
-            formulación con prueba de laboratorio antes de producción.
+            la dureza real depende del índice NCO, temperatura y curado. Las ranuras curvas se descuentan como cápsulas de
+            ancho constante sobre el radio central definido por el operador: A = θc·R·w + π·(w/2)²; V = A·H·N, con nervio
+            estándar de 6° por ranura. El isocianato es un sensitizador respiratorio: manipular con EPP completo en área
+            ventilada. Validar toda formulación con prueba de laboratorio antes de producción.
           </span>
         </p>
         <p class="mt-3 text-slate-700">CAR-SEV C.A. · Fabricación de tapas y bases para filtros de aire automotrices e industriales.</p>

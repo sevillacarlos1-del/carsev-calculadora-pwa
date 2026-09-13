@@ -3,15 +3,20 @@
  * Todos los cálculos internos trabajan en gramos y cm³.
  * Método expuesto como objeto global (script clásico, sin build).
  *
- * v1.2.1:
- *  · Huecos = RANURAS OVALADAS CURVAS (cápsulas en arco):
- *    canales concéntricos de ancho constante w trazados sobre el
- *    radio medio Rm del anillo, con extremos semicirculares.
- *  · Geometría exacta de la cápsula:
+ * v1.2.2:
+ *  · RANURAS OVALADAS CURVAS (cápsulas en arco) con RADIO CENTRAL
+ *    DEFINIDO POR EL OPERADOR: la ranura ya no se centra
+ *    automáticamente en el anillo; el usuario fija la distancia
+ *    del centro de la tapa al eje del canal (alineación con el
+ *    cilindro interno del filtro, borde externo, etc.).
+ *  · Geometría exacta de la cápsula sobre radio R:
  *      apertura punta-a-punta  θeff = 360°/N − nervio
- *      span central            θc   = θeff − 2·arcsen(w / 2Rm)
- *      área por ranura         A    = θc·Rm·w + π·(w/2)²
+ *      span central            θc   = θeff − 2·arcsen(w / 2R)
+ *      área por ranura         A    = θc·R·w + π·(w/2)²
  *      volumen restado         V    = A · H · N
+ *  · Validación de encaje radial:
+ *      R − w/2 ≥ Ø_int/2   (no invade el centro)
+ *      R + w/2 ≤ Ø_ext/2   (no se sale del plato)
  *  · Merma fija 0.5 % y Tapa Sellada sin cambios.
  * ============================================================ */
 
@@ -126,26 +131,29 @@ const Calculator = (() => {
    *   Directo:    V = valor ingresado en cm³ (se considera neto)
    *
    * Tapa con huecos (RANURAS OVALADAS CURVAS — cápsulas en arco):
-   *   Cada ranura es un canal concéntrico de ancho constante w,
-   *   trazado sobre el radio medio Rm = (DE + DI) / 4, con
-   *   extremos semicirculares de radio rc = w/2.
+   *   Cada ranura es un canal de ancho constante w trazado sobre el
+   *   RADIO CENTRAL R definido por el operador (posición radial
+   *   exacta del eje del canal), con extremos semicirculares de
+   *   radio rc = w/2.
    *
    *   paso angular (centro a centro)  = 360° / N
    *   apertura punta-a-punta          θeff = paso − nervio
-   *   span central del arco           θc   = θeff − 2·arcsen(rc / Rm)
-   *   área del tramo en arco          = θc · Rm · w
+   *   span central del arco           θc   = θeff − 2·arcsen(rc / R)
+   *   área del tramo en arco          = θc · R · w
    *   área de los extremos redondeados = π · rc²  (dos semicírculos)
-   *   área total por ranura           = θc·Rm·w + π·rc²
+   *   área total por ranura           = θc·R·w + π·rc²
    *   volumen restado                 = área · H · N
    *
-   * Las ranuras requieren geometría ANULAR: el canal vive entre
-   * los radios interior y exterior del anillo.
+   *   Encaje radial exigido (en cm):
+   *     R − rc ≥ DI/2   (borde interno no invade el centro)
+   *     R + rc ≤ DE/2   (borde externo no sale del plato)
    * ============================================================ */
   function moldVolume({
     shape,        // 'annular' | 'cylinder' | 'direct'
     capType,      // 'sealed' | 'holes'
     holesCount,   // 4–12 ranuras curvas
     slotWidth,    // ancho de ranura w (mm)
+    slotRadius,   // radio central del canal R, desde el centro de la tapa (mm)
     outerD, innerD, height, unit,
     directVolume,
   }) {
@@ -188,7 +196,7 @@ const Calculator = (() => {
       // El canal concéntrico exige radios interior y exterior
       if (shape !== 'annular') {
         return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
-                 reason: 'Las ranuras curvas siguen la circunferencia del anillo: selecciona geometría Anular para el modo con huecos.' };
+                 reason: 'Las ranuras curvas siguen la circunferencia de la tapa: selecciona geometría Anular para el modo con huecos.' };
       }
 
       const n = clamp(Math.round(holesCount || 0), HOLES_MIN, HOLES_MAX);
@@ -199,7 +207,13 @@ const Calculator = (() => {
                  reason: 'Ingresa el ancho de cada ranura curva en milímetros.' };
       }
 
-      const wCm = wMm / 10;
+      const RMm = Math.max(0, slotRadius || 0);
+      if (RMm <= 0) {
+        return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
+                 reason: 'Ingresa el radio central de la ranura (distancia del centro de la tapa al eje del canal) en milímetros.' };
+      }
+
+      const wCm  = wMm / 10;
       const wMaxCm = DE - DI; // ancho radial disponible del anillo
       if (wCm >= wMaxCm) {
         return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
@@ -215,22 +229,35 @@ const Calculator = (() => {
                  reason: `Con ${n} ranuras y nervio estándar de ${RIB_MARGIN_DEG}° no queda apertura efectiva. Reduce el nervio o la cantidad de ranuras.` };
       }
 
-      const Rm = (DE + DI) / 4;  // radio medio del anillo (cm): traza del canal
-      const rc = wCm / 2;        // radio de los extremos semicirculares (cm)
+      const R  = RMm / 10;  // radio central del canal (cm) — definido por el operador
+      const rc = wCm / 2;   // radio de los extremos semicirculares (cm)
+
+      /* ---- Encaje radial: la ranura debe vivir DENTRO del anillo ---- */
+      const minRMm = (DI / 2 + rc) * 10;  // borde interno en el Ø interior
+      const maxRMm = (DE / 2 - rc) * 10;  // borde externo en el Ø exterior
+
+      if (R - rc < DI / 2) {
+        return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
+                 reason: `El radio central de la ranura (${num(RMm, 1)} mm) es demasiado bajo: con un ancho de ${num(wMm, 1)} mm, el borde interno invade el centro. Mínimo permitido: ${num(minRMm, 1)} mm.` };
+      }
+      if (R + rc > DE / 2) {
+        return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
+                 reason: `El radio central de la ranura (${num(RMm, 1)} mm) es demasiado alto: con un ancho de ${num(wMm, 1)} mm, el borde externo se sale del plato. Máximo permitido: ${num(maxRMm, 1)} mm.` };
+      }
 
       // El span central se recorta por los semicírculos de las puntas:
-      // cada punta subtiende arcsen(rc/Rm) visto desde el centro.
+      // cada punta subtiende arcsen(rc/R) visto desde el centro.
       const effRad      = (effDeg * Math.PI) / 180;
-      const thetaCenter = effRad - 2 * Math.asin(Math.min(1, rc / Rm));
+      const thetaCenter = effRad - 2 * Math.asin(Math.min(1, rc / R));
 
       if (thetaCenter <= 0) {
         return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
-                 reason: `Con ${n} ranuras (apertura ${num(effDeg, 1)}°), un ancho de ${num(wMm, 1)} mm hace solapar los extremos redondeados. Reduce el ancho de la ranura o usa menos ranuras.` };
+                 reason: `Con ${n} ranuras (apertura ${num(effDeg, 1)}°), un ancho de ${num(wMm, 1)} mm a radio ${num(RMm, 1)} mm hace solapar los extremos redondeados. Reduce el ancho, sube el radio o usa menos ranuras.` };
       }
 
-      // Área EXACTA de la cápsula en arco:
-      // tramo recto-en-arco (θc·Rm·w) + dos semicírculos (π·rc²)
-      const windowArea = Rm * wCm * thetaCenter + Math.PI * rc * rc;
+      // Área EXACTA de la cápsula en arco sobre el radio R:
+      // tramo recto-en-arco (θc·R·w) + dos semicírculos (π·rc²)
+      const windowArea = R * wCm * thetaCenter + Math.PI * rc * rc;
 
       // Volumen total restado = área · espesor(H) · cantidad de ranuras
       holesVolume = windowArea * H * n;
@@ -248,10 +275,13 @@ const Calculator = (() => {
         ribDeg: RIB_MARGIN_DEG,
         effDeg,
         slotWidthCm: wCm,
-        centerRadiusCm: Rm,
+        centerRadiusCm: R,               // radio central definido por el operador
+        centerRadiusMm: RMm,
+        minRadiusMm: minRMm,             // rango válido para guiar al operador
+        maxRadiusMm: maxRMm,
         capRadiusCm: rc,
         thetaCenterRad: thetaCenter,
-        arcLenCm: thetaCenter * Rm,      // longitud del arco de centro del canal
+        arcLenCm: thetaCenter * R,       // longitud del arco de centro del canal
         windowAreaCm2: windowArea,
         windowVolCm3: windowArea * H,
         holesVolumeCm3: holesVolume,

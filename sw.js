@@ -1,11 +1,11 @@
 /* ============================================================
  * CAR-SEV C.A. — Service Worker
- * v1.2.1: bump de caché para propagar la geometría de ranuras
- * ovaladas curvas (cápsulas en arco con puntas redondeadas).
- * Rutas y estrategias de caché intactas.
+ * v1.2.2: bump de caché para propagar el control radial del
+ * operador (radio central de ranura editable). Rutas y
+ * estrategias de caché intactas.
  * ============================================================ */
 
-const CACHE_NAME = 'carsev-v1.2.1';
+const CACHE_NAME = 'carsev-v1.2.2';
 
 const PRECACHE_URLS = [
   './',

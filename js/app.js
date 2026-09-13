@@ -2,11 +2,11 @@
  * CAR-SEV C.A. — Controlador de interfaz y ciclo de vida PWA
  * Depende de: Calculator (js/calculator.js), Storage (js/storage.js)
  *
- * v1.2.1:
- *  · Ranuras ovaladas curvas (cápsulas en arco) con extremos
- *    semicirculares: trazador de path capsulePath() en el plano.
- *  · Cota de ancho w sobre la primera ranura en vista superior.
- *  · Ancho de ranura (mm) como parámetro (sesión + recetas).
+ * v1.2.2:
+ *  · Radio central de ranura (mm) como campo editable: posición
+ *    radial exacta del canal, independiente de Ø int y Ø ext.
+ *  · El SVG dibuja la cápsula en el radio asignado por el
+ *    operador y muestra el rango válido de R.
  *  · Merma fija 0.5 % y totalizador de lote sin cambios.
  * ============================================================ */
 
@@ -170,7 +170,7 @@
   }
 
   /* ============================================================
-   * MÓDULO B — TAPAS: cubaje, ranuras curvas y plano técnico
+   * MÓDULO B — TAPAS: cubaje, ranuras radiales y plano técnico
    * ============================================================ */
   function recalcMold() {
     const shape = state.moldShape;
@@ -179,6 +179,7 @@
       capType: state.capType,
       holesCount: state.holesCount,
       slotWidth: parseFloat($('inSlotW').value) || 0,
+      slotRadius: parseFloat($('inSlotR').value) || 0,
       outerD: parseFloat($('inOuterD').value) || 0,
       innerD: parseFloat($('inInnerD').value) || 0,
       height: parseFloat($('inHeight').value) || 0,
@@ -258,7 +259,7 @@
     $('outPitchDeg').textContent = Calculator.num(windows.pitchDeg, 1);
     $('outEffDeg').textContent   = Calculator.num(windows.effDeg, 1);
 
-    // Arco de centro del canal (sobre Rm), en la unidad de dimensión activa
+    // Arco de centro del canal (sobre el radio R asignado), en la unidad activa
     const arc = windows.arcLenCm * (unit === 'mm' ? 10 : 1);
     $('outArcLen').textContent = `${Calculator.num(arc, 1)} ${unit}`;
 
@@ -291,12 +292,6 @@
    *
    * Path: arco exterior → semicírculo de punta (a2) →
    *       arco interior (regreso) → semicírculo de punta (a1).
-   *
-   * @param {number} cx,cy      centro de la tapa en px
-   * @param {number} rMid       radio medio del canal (px)
-   * @param {number} rc         radio de los extremos (px)
-   * @param {number} centerAng  ángulo del centro de la ranura (rad)
-   * @param {number} thetaC     span angular central (rad, entre centros de puntas)
    */
   function capsulePath(cx, cy, rMid, rc, centerAng, thetaC) {
     const rOut = rMid + rc;
@@ -366,22 +361,27 @@
 
     let top = '';
     let front = '';
+    let slotsSVG = '';
+    let widthDim = '';
 
     // ===== Ranuras ovaladas curvas (cápsulas) en vista superior =====
-    let holesSVG = '';
-    let widthDim = '';
     if (windows) {
-      // Radios del canal en px, coherentes con la escala del anillo
-      const rMidPx = ((outerD + innerD) / 4) * k;                       // Rm
-      const wUnit  = windows.slotWidthCm * (unit === 'mm' ? 10 : 1);    // mm → unidad activa
-      const rcPx   = (wUnit / 2) * k;                                   // radio de puntas
+      // Radio central del canal EN PX, desde el radio asignado por el operador
+      const rUnit   = windows.centerRadiusCm * (unit === 'mm' ? 10 : 1); // R en unidad activa
+      const wUnit   = windows.slotWidthCm * (unit === 'mm' ? 10 : 1);    // w en unidad activa
+      const rMidPx  = rUnit * k;
+      const rcPx    = (wUnit / 2) * k;
 
       const pitchRad = (2 * Math.PI) / windows.count;
       for (let i = 0; i < windows.count; i++) {
         const center = -Math.PI / 2 + i * pitchRad; // primera ranura arriba
-        holesSVG += `<path d="${capsulePath(CX, CY, rMidPx, rcPx, center, windows.thetaCenterRad)}"
+        slotsSVG += `<path d="${capsulePath(CX, CY, rMidPx, rcPx, center, windows.thetaCenterRad)}"
           fill="#020617" fill-opacity="0.92" stroke="#0e7490" stroke-width="1"/>`;
       }
+
+      // Circunferencia guía del radio R (traza de puntos del canal)
+      slotsSVG += `<circle cx="${CX}" cy="${CY}" r="${rMidPx.toFixed(1)}" fill="none"
+        stroke="#0e7490" stroke-width="0.6" stroke-dasharray="2 4" stroke-opacity="0.6"/>`;
 
       // Cota de ancho w sobre la primera ranura (línea radial con topes)
       if (rcPx > 5) {
@@ -399,9 +399,11 @@
           `<text x="${mid.x.toFixed(1)}" y="${(mid.y + 3).toFixed(1)}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#67e8f9" stroke="#020617" stroke-width="3" paint-order="stroke">w</text>`;
       }
 
-      // Rótulo del patrón de ranuras
+      // Rótulo del patrón: cantidad, ancho, radio central y apertura
       const wShow = windows.slotWidthCm * (unit === 'mm' ? 10 : 1);
-      top += label(CX, 31, `${windows.count} ran · w${Calculator.num(wShow, 0)}${uLabel} · ${Calculator.num(windows.effDeg, 0)}°`, 'middle', '#0e7490', 9);
+      const rShow = windows.centerRadiusCm * (unit === 'mm' ? 10 : 1);
+      top += label(CX, 31, `${windows.count} ran · w${Calculator.num(wShow, 0)} · R${Calculator.num(rShow, 0)}${uLabel}`, 'middle', '#0e7490', 9);
+      top += label(CX, 42, `${Calculator.num(windows.effDeg, 0)}° efectivos`, 'middle', '#475569', 8);
     }
 
     // ===== Vista superior =====
@@ -416,12 +418,12 @@
               stroke="#22d3ee" stroke-width="1.5"/>`;
       // Cota Ø interior: flechas hacia afuera desde el centro
       top += `<line x1="${CX - rInt}" y1="${CY}" x2="${CX + rInt}" y2="${CY}" ${dimStroke}/>`;
-      top += label(CX, CY - 5, `Ø${innerD}`);
+      if (rInt > 14) top += label(CX, CY - 5, `Ø${innerD}`);
     } else {
       top += `<circle cx="${CX}" cy="${CY}" r="${rExt}" fill="rgba(34,211,238,0.07)" stroke="#22d3ee" stroke-width="1.5"/>
               <line x1="${CX - rExt}" y1="${CY}" x2="${CX + rExt}" y2="${CY}" stroke="#0e7490" stroke-width="1" stroke-dasharray="4 3"/>`;
     }
-    top += holesSVG;
+    top += slotsSVG;
     top += widthDim;
 
     // Cota Ø exterior (debajo de la vista superior)
@@ -618,7 +620,7 @@
       const qty = Math.round(parseFloat($('inLotQty').value) || 0);
       const w = state.lastMold ? state.lastMold.windows : null;
       const capLabel = w
-        ? `${w.count} ranuras curvas de ${Calculator.num(w.slotWidthCm * 10, 1)} mm (apertura ${Calculator.num(w.effDeg, 1)}° = paso ${Calculator.num(w.pitchDeg, 1)}° − nervio ${w.ribDeg}°)`
+        ? `${w.count} ranuras de ${Calculator.num(w.slotWidthCm * 10, 1)} mm a R${Calculator.num(w.centerRadiusMm, 1)} mm (apertura ${Calculator.num(w.effDeg, 1)}° = paso ${Calculator.num(w.pitchDeg, 1)}° − nervio ${w.ribDeg}°)`
         : 'tapa sellada';
       lines.push('----------------------------------------');
       lines.push(`Lote: ${qty} tapas · ${capLabel} · masa/tapa ${Calculator.num(state.lastMold ? state.lastMold.pieceMass : 0, 1)} g`);
@@ -684,6 +686,7 @@
         r.wastePct != null ? `merma ${Calculator.num(r.wastePct, 1)}%` : null,
         p.capType === 'holes' ? `${p.holesCount || '—'} ranuras curvas` : (p.capType === 'sealed' ? 'sellada' : null),
         p.slotWidth > 0 ? `w ${p.slotWidth} mm` : null,
+        p.slotRadius > 0 ? `R ${p.slotRadius} mm` : null,
         p.lotQty > 0 ? `${p.lotQty} tapas` : null,
         r.pieceMass > 0 ? `${Calculator.num(r.pieceMass, 1)} g/tapa` : null,
         r.costPerPiece > 0 ? `$${r.costPerPiece.toFixed(4)}/tapa` : null,
@@ -790,6 +793,7 @@
         count: state.lastMold.windows.count,
         effDeg: state.lastMold.windows.effDeg,
         slotWidthMm: +(state.lastMold.windows.slotWidthCm * 10).toFixed(1),
+        centerRadiusMm: state.lastMold.windows.centerRadiusMm,
       } : null,
       lot: state.lastLot ? {
         qty: Math.round(parseFloat($('inLotQty').value) || 0),
@@ -821,6 +825,7 @@
         capType: state.capType,
         holesCount: state.holesCount,
         slotWidth: parseFloat($('inSlotW').value) || 0,
+        slotRadius: parseFloat($('inSlotR').value) || 0,
         lotQty: parseFloat($('inLotQty').value) || 0,
         moldShape: state.moldShape,
         outerD: parseFloat($('inOuterD').value) || 0,
@@ -872,6 +877,7 @@
     setVal('inPieceMass', p.pieceMass);
     // NOTA: la merma NO se restaura desde la receta: es fija de planta (0.5 %)
     setVal('inSlotW', p.slotWidth);
+    setVal('inSlotR', p.slotRadius); // recetas v1.2.1 sin slotRadius → queda el default 60
     setVal('inLotQty', p.lotQty);
     setVal('inOuterD', p.outerD);
     setVal('inInnerD', p.innerD);
@@ -906,7 +912,7 @@
    * ============================================================ */
   const SESSION_FIELDS = [
     'inTotalWeight', 'selTotalUnit', 'inPieces', 'inPieceMass',
-    'inSlotW', 'inLotQty',
+    'inSlotW', 'inSlotR', 'inLotQty',
     'inOuterD', 'inInnerD', 'inHeight', 'selDimUnit',
     'inDirectVol', 'inDensity', 'inFlex',
     'inPigment', 'inCatalyst', 'inRelease',
@@ -1099,7 +1105,7 @@
     const recalcTriggers = [
       'inTotalWeight', 'selTotalUnit', 'inPieces', 'inPieceMass',
       'inRatioA', 'inRatioB',
-      'inSlotW', 'inLotQty',
+      'inSlotW', 'inSlotR', 'inLotQty',
       'inOuterD', 'inInnerD', 'inHeight', 'selDimUnit', 'inDirectVol',
       'inDensity', 'inFlex', 'inPigment', 'inCatalyst', 'inRelease',
       'inPolyolPrice', 'inIsoPrice',
