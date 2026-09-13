@@ -2,19 +2,25 @@
  * CAR-SEV C.A. — Motor de cálculo estequiométrico
  * Todos los cálculos internos trabajan en gramos y cm³.
  * Método expuesto como objeto global (script clásico, sin build).
+ *
+ * v1.1.0:
+ *  · WASTE_FIXED: merma fija de planta en 0.5 % (protocolo).
+ *  · moldVolume() soporta capType 'sealed' | 'holes' con 4–12
+ *    huecos pasantes (descuento π/4 · Ø² · H por orificio).
  * ============================================================ */
 
 'use strict';
 
 const Calculator = (() => {
 
-  /* ---------- Constantes químicas de referencia ---------- */
-  const SHORE_FLEX  = 62;  // Shore A aprox. de poliol 100% flexible colado
-  const SHORE_RIGID = 84;  // Shore A aprox. de poliol 100% rígido colado
+  /* ---------- Constantes químicas y de planta ---------- */
+  const SHORE_FLEX  = 62;   // Shore A aprox. de poliol 100% flexible colado
+  const SHORE_RIGID = 84;   // Shore A aprox. de poliol 100% rígido colado
   const DENSITY_MIN = 0.80;
   const DENSITY_MAX = 1.60;
-  const WASTE_MIN   = 0;   // %
-  const WASTE_MAX   = 15;  // %
+  const WASTE_FIXED = 0.5;  // % FIJO de merma/seguridad (protocolo CAR-SEV). No ajustar por UI.
+  const HOLES_MIN   = 4;    // Mínimo de huecos por tapa
+  const HOLES_MAX   = 12;   // Máximo de huecos por tapa
 
   /* ---------- Utilidades ---------- */
 
@@ -47,6 +53,7 @@ const Calculator = (() => {
    * La mezcla total (con merma) se reparte según la relación
    * en peso A:B. La merma se distribuye proporcionalmente para
    * mantener el índice de NCO real de la formulación.
+   * La app pasa siempre wastePct = WASTE_FIXED (0.5 %).
    * ============================================================ */
   function computeMix({
     mode,               // 'weight' | 'pieces'
@@ -56,7 +63,7 @@ const Calculator = (() => {
     pieceMass,          // gramos por tapa
     ratioA,             // partes en peso de Poliol
     ratioB,             // partes en peso de Isocianato
-    wastePct,           // 0–15 %
+    wastePct,           // % de merma (la UI siempre envía WASTE_FIXED)
   }) {
     const a = Math.max(0, ratioA || 0);
     const b = Math.max(0, ratioB || 0);
@@ -78,8 +85,8 @@ const Calculator = (() => {
       return { valid: false, reason: 'Ingresa una masa o cantidad de piezas válida.' };
     }
 
-    // 2) Aplicación del factor de merma / seguridad
-    const waste = clamp(wastePct || 0, WASTE_MIN, WASTE_MAX);
+    // 2) Aplicación del factor de merma (0.5 % fijo desde la UI)
+    const waste = clamp(wastePct || 0, 0, 15);
     const wasteFactor = 1 + waste / 100;
     const totalWithWaste = baseMass * wasteFactor;
     const wasteMass = totalWithWaste - baseMass;
@@ -105,13 +112,31 @@ const Calculator = (() => {
 
   /* ============================================================
    * MÓDULO B — Cubaje del molde (cm³) y masa por tapa
-   * Anular:    V = π/4 · (DE² − DI²) · H
+   *
+   * Anular:     V = π/4 · (DE² − DI²) · H
    * Cilíndrico: V = π/4 · D² · H
+   * Directo:    V = valor ingresado en cm³ (se considera neto)
+   *
+   * Tapa con huecos (capType = 'holes'): cada orificio pasante
+   * de Ø d (mm) y altura H descuenta π/4 · d² · H del cubaje.
    * ============================================================ */
-  function moldVolume({ shape, outerD, innerD, height, unit, directVolume }) {
+  function moldVolume({
+    shape,        // 'annular' | 'cylinder' | 'direct'
+    capType,      // 'sealed' | 'holes'
+    holesCount,   // 4–12
+    holeDia,      // mm
+    outerD, innerD, height, unit,
+    directVolume,
+  }) {
     if (shape === 'direct') {
       const v = Math.max(0, directVolume || 0);
-      return { valid: v > 0, volume: v, reason: v > 0 ? '' : 'Ingresa un volumen válido.' };
+      return {
+        valid: v > 0,
+        volume: v,
+        grossVolume: v,
+        holesVolume: 0,
+        reason: v > 0 ? '' : 'Ingresa un volumen válido.',
+      };
     }
 
     // Normalización de unidades a cm
@@ -121,20 +146,49 @@ const Calculator = (() => {
     const H  = (height  || 0) * f;
 
     if (DE <= 0 || H <= 0) {
-      return { valid: false, volume: 0, reason: 'El diámetro exterior y la altura deben ser mayores que cero.' };
+      return { valid: false, volume: 0, grossVolume: 0, holesVolume: 0,
+               reason: 'El diámetro exterior y la altura deben ser mayores que cero.' };
     }
     if (shape === 'annular' && (DI <= 0 || DI >= DE)) {
-      return { valid: false, volume: 0, reason: 'En molde anular, el Ø interior debe ser menor que el Ø exterior.' };
+      return { valid: false, volume: 0, grossVolume: 0, holesVolume: 0,
+               reason: 'En molde anular, el Ø interior debe ser menor que el Ø exterior.' };
     }
 
-    const volume = shape === 'annular'
+    const gross = shape === 'annular'
       ? (Math.PI / 4) * (DE * DE - DI * DI) * H
       : (Math.PI / 4) * DE * DE * H;
 
-    return { valid: true, volume };
+    /* ---- Descuento por huecos pasantes ---- */
+    let holesVolume = 0;
+    if (capType === 'holes') {
+      const n = clamp(Math.round(holesCount || 0), 0, 99);
+      if (n > 0) {
+        const dCm = (holeDia || 0) / 10; // mm → cm
+        if (dCm <= 0) {
+          return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0,
+                   reason: 'Ingresa el Ø de cada hueco en milímetros.' };
+        }
+        if (shape === 'annular' && dCm >= (DE - DI)) {
+          return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0,
+                   reason: `El Ø del hueco (${num(dCm * 10, 1)} mm) debe ser menor que el ancho del anillo (${num((DE - DI) * 10, 1)} mm = Ø ext − Ø int).` };
+        }
+        holesVolume = n * (Math.PI / 4) * dCm * dCm * H;
+        if (holesVolume >= gross) {
+          return { valid: false, volume: 0, grossVolume: gross, holesVolume,
+                   reason: 'Los huecos descontarían más volumen que el de la cavidad. Revisa Ø o cantidad.' };
+        }
+      }
+    }
+
+    return {
+      valid: true,
+      volume: gross - holesVolume,
+      grossVolume: gross,
+      holesVolume,
+    };
   }
 
-  /** Masa (g) = Volumen (cm³) × Densidad (g/cm³). */
+  /** Masa (g) = Volumen neto (cm³) × Densidad (g/cm³). */
   function massFromVolume(volumeCm3, density) {
     const d = clamp(density || 0, DENSITY_MIN, DENSITY_MAX);
     return Math.max(0, volumeCm3 || 0) * d;
@@ -187,8 +241,9 @@ const Calculator = (() => {
     SHORE_RIGID,
     DENSITY_MIN,
     DENSITY_MAX,
-    WASTE_MIN,
-    WASTE_MAX,
+    WASTE_FIXED,
+    HOLES_MIN,
+    HOLES_MAX,
     toGrams,
     roundToGrams,
     num,

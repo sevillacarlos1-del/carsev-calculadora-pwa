@@ -1,6 +1,11 @@
 /* ============================================================
  * CAR-SEV C.A. — Controlador de interfaz y ciclo de vida PWA
  * Depende de: Calculator (js/calculator.js), Storage (js/storage.js)
+ *
+ * v1.1.0:
+ *  · Merma fija de planta en 0.5 % (Calculator.WASTE_FIXED).
+ *  · Tipo de tapa: Sellada (cálculo original) / con Huecos (4–12).
+ *  · Totalizador de lote por cantidad de tapas a fabricar.
  * ============================================================ */
 
 'use strict';
@@ -15,14 +20,14 @@
   const state = {
     dosMode: 'weight',          // 'weight' | 'pieces'
     moldShape: 'annular',       // 'annular' | 'cylinder' | 'direct'
+    capType: 'sealed',          // 'sealed' | 'holes'
+    holesCount: 6,              // 4–12 huecos
     activeRatio: { a: 100, b: 50, custom: false },
-    lastMix: null,              // resultado del motor de cálculo
-    lastMold: null,             // { volume, pieceMass }
+    lastMix: null,              // resultado del motor de cálculo (módulo 01)
+    lastMold: null,             // { volume neto, grossVolume, holesVolume, pieceMass, ... }
+    lastLot: null,              // resultado del totalizador de lote
     deferredPrompt: null,       // evento de instalación PWA
   };
-
-  /* Referencias rápidas a resultados (cache de DOM) */
-  const el = {};
 
   /* ============================================================
    * TOASTS (feedback no bloqueante)
@@ -83,7 +88,7 @@
   }
 
   /* ============================================================
-   * MÓDULO A — DOSIFICACIÓN
+   * MÓDULO A — DOSIFICACIÓN (merma fija 0.5 %)
    * ============================================================ */
   function setDosMode(mode) {
     state.dosMode = mode;
@@ -115,15 +120,12 @@
       pieceMass: parseFloat($('inPieceMass').value) || 0,
       ratioA: parseFloat($('inRatioA').value) || 0,
       ratioB: parseFloat($('inRatioB').value) || 0,
-      wastePct: parseFloat($('inWaste').value) || 0,
+      wastePct: Calculator.WASTE_FIXED, // 0.5 % fijo de planta
     };
   }
 
   function recalcMix() {
     const inputs = readInputs();
-    const out = $('outWasteVal');
-    out.textContent = Calculator.num(inputs.wastePct, 1);
-    paintRange($('inWaste'), '#22d3ee');
 
     const mix = Calculator.computeMix(inputs);
     state.lastMix = mix;
@@ -150,7 +152,7 @@
     $('outPolyolBatch').textContent = mix.polyolBatch.toLocaleString('es');
     $('outIsoBatch').textContent    = mix.isoBatch.toLocaleString('es');
 
-    // Desglose base + merma
+    // Desglose base + merma (0.5 %)
     $('outBase').textContent   = Calculator.num(mix.baseMass, 1);
     $('outWasteG').textContent = Calculator.num(mix.wasteMass, 1);
 
@@ -159,20 +161,22 @@
     $('mixBarB').style.width = mix.pctB.toFixed(1) + '%';
     $('outPctA').textContent = mix.pctA.toFixed(1);
     $('outPctB').textContent = mix.pctB.toFixed(1);
-    $('outRatioLabel').textContent =
-      `${inputs.ratioA} : ${inputs.ratioB}`;
+    $('outRatioLabel').textContent = `${inputs.ratioA} : ${inputs.ratioB}`;
 
     recalcAdditives();
     recalcCosts();
   }
 
   /* ============================================================
-   * MÓDULO B — CUBAJE Y PLANO DEL MOLDE
+   * MÓDULO B — TAPAS: cubaje, huecos y plano técnico
    * ============================================================ */
   function recalcMold() {
     const shape = state.moldShape;
     const inputs = {
       shape,
+      capType: state.capType,
+      holesCount: state.holesCount,
+      holeDia: parseFloat($('inHoleD').value) || 0,
       outerD: parseFloat($('inOuterD').value) || 0,
       innerD: parseFloat($('inInnerD').value) || 0,
       height: parseFloat($('inHeight').value) || 0,
@@ -190,23 +194,49 @@
     if (!result.valid) {
       $('outVolume').textContent = '—';
       $('outPieceMass').textContent = '—';
+      $('volBreakdown').classList.add('hidden');
       state.lastMold = null;
       warn.textContent = result.reason;
       warn.classList.remove('hidden');
       renderMoldSVG(null);
       updateUseMassButtons();
+      recalcLot();
       return;
     }
 
-    warn.classList.add('hidden');
+    // Nota informativa: volumen directo ya se considera neto
+    if (shape === 'direct' && state.capType === 'holes') {
+      warn.textContent = 'En modo cm³ directo el volumen ingresado se considera neto: los huecos no se descuentan del cubaje.';
+      warn.classList.remove('hidden');
+    } else {
+      warn.classList.add('hidden');
+    }
+
     const mass = Calculator.massFromVolume(result.volume, density);
-    state.lastMold = { volume: result.volume, pieceMass: mass, unit: inputs.unit, ...inputs };
+    state.lastMold = {
+      volume: result.volume,
+      grossVolume: result.grossVolume,
+      holesVolume: result.holesVolume,
+      pieceMass: mass,
+      ...inputs,
+    };
 
     $('outVolume').textContent    = Calculator.num(result.volume, 1);
     $('outPieceMass').textContent = Calculator.num(mass, 1);
 
+    // Desglose bruto − huecos = neto (solo con huecos geométricos)
+    const bd = $('volBreakdown');
+    if (state.capType === 'holes' && shape !== 'direct' && result.holesVolume > 0) {
+      bd.classList.remove('hidden');
+      $('outVolGross').textContent = Calculator.num(result.grossVolume, 1);
+      $('outVolHoles').textContent = '− ' + Calculator.num(result.holesVolume, 1);
+    } else {
+      bd.classList.add('hidden');
+    }
+
     renderMoldSVG(state.lastMold);
     updateUseMassButtons();
+    recalcLot();
   }
 
   function updateUseMassButtons() {
@@ -237,7 +267,19 @@
       return;
     }
 
-    const { shape, outerD, innerD, height, unit } = mold;
+    // Modo cm³ directo: sin geometría que dibujar
+    if (mold.shape === 'direct') {
+      svg.innerHTML = `
+        <text x="170" y="88" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12" fill="#475569">
+          Volumen ingresado directamente
+        </text>
+        <text x="170" y="108" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="#64748b">
+          ${mold.volume.toFixed(1)} cm³ · sin plano geométrico
+        </text>`;
+      return;
+    }
+
+    const { shape, outerD, innerD, height, unit, capType, holesCount, holeDia } = mold;
     // Escala: diámetro ≤ 118 px, altura ≤ 66 px dentro del lienzo 340×190
     const k = Math.min(118 / outerD, 66 / height);
     const deW = outerD * k;
@@ -259,6 +301,23 @@
     let top = '';
     let front = '';
 
+    // ===== Huecos pasantes en vista superior =====
+    let holesSVG = '';
+    if (capType === 'holes' && holesCount > 0 && holeDia > 0) {
+      const dUnit = holeDia * (unit === 'mm' ? 1 : 0.1); // Ø del hueco en la unidad activa
+      const rHole = (dUnit * k) / 2;
+      if (rHole > 0.8) {
+        const rMid = shape === 'annular' ? (rExt + rInt) / 2 : rExt * 0.68;
+        for (let i = 0; i < holesCount; i++) {
+          const ang = (2 * Math.PI * i) / holesCount - Math.PI / 2;
+          const hx = CX + rMid * Math.cos(ang);
+          const hy = CY + rMid * Math.sin(ang);
+          holesSVG += `<circle cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="${rHole.toFixed(1)}"
+            fill="#020617" fill-opacity="0.9" stroke="#0e7490" stroke-width="1"/>`;
+        }
+      }
+    }
+
     // ===== Vista superior =====
     if (shape === 'annular') {
       top += `<path d="M ${CX - rExt} ${CY}
@@ -276,6 +335,8 @@
       top += `<circle cx="${CX}" cy="${CY}" r="${rExt}" fill="rgba(34,211,238,0.07)" stroke="#22d3ee" stroke-width="1.5"/>
               <line x1="${CX - rExt}" y1="${CY}" x2="${CX + rExt}" y2="${CY}" stroke="#0e7490" stroke-width="1" stroke-dasharray="4 3"/>`;
     }
+    top += holesSVG;
+
     // Cota Ø exterior (debajo de la vista superior)
     const dimY = CY + rExt + 20;
     top += `<line x1="${CX - rExt}" y1="${dimY}" x2="${CX + rExt}" y2="${dimY}" ${dimStroke}/>`;
@@ -308,6 +369,55 @@
       </defs>
       ${top}
       ${front}`;
+  }
+
+  /* ============================================================
+   * TOTALIZADOR DE LOTE (merma fija 0.5 %)
+   * ============================================================ */
+  function recalcLot() {
+    const qty = parseFloat($('inLotQty').value) || 0;
+    const mass = state.lastMold ? state.lastMold.pieceMass : 0;
+    const ratioA = parseFloat($('inRatioA').value) || 0;
+    const ratioB = parseFloat($('inRatioB').value) || 0;
+
+    $('outLotRatio').textContent = `${$('inRatioA').value || '—'}:${$('inRatioB').value || '—'}`;
+
+    const lot = Calculator.computeMix({
+      mode: 'pieces',
+      pieces: qty,
+      pieceMass: mass,
+      ratioA,
+      ratioB,
+      wastePct: Calculator.WASTE_FIXED,
+    });
+    state.lastLot = lot.valid ? lot : null;
+
+    if (!lot.valid) {
+      ['outLotPolyol', 'outLotPolyolKg', 'outLotIso', 'outLotIsoKg',
+       'outLotTotal', 'outLotBase', 'outLotWaste'].forEach((id) => ($(id).textContent = '—'));
+      $('lotCostRow').classList.add('hidden');
+      return;
+    }
+
+    $('outLotPolyol').textContent    = Calculator.num(lot.polyol, 1);
+    $('outLotPolyolKg').textContent  = Calculator.num(lot.polyol / 1000, 2);
+    $('outLotIso').textContent       = Calculator.num(lot.iso, 1);
+    $('outLotIsoKg').textContent     = Calculator.num(lot.iso / 1000, 2);
+    $('outLotTotal').textContent     = Calculator.num(lot.totalWithWaste, 1);
+    $('outLotBase').textContent      = Calculator.num(lot.baseMass, 1);
+    $('outLotWaste').textContent     = Calculator.num(lot.wasteMass, 1);
+
+    // Costo del lote (solo si hay precios cargados)
+    const priceA = parseFloat($('inPolyolPrice').value) || 0;
+    const priceB = parseFloat($('inIsoPrice').value) || 0;
+    const row = $('lotCostRow');
+    if (priceA > 0 || priceB > 0) {
+      const costKg = Calculator.costPerKg(lot.pctA, lot.pctB, priceA, priceB);
+      $('outLotCost').textContent = Calculator.num(Calculator.costBatch(lot.totalWithWaste, costKg), 2);
+      row.classList.remove('hidden');
+    } else {
+      row.classList.add('hidden');
+    }
   }
 
   /* ============================================================
@@ -393,7 +503,7 @@
   /* ---------- Recalculo encadenado ---------- */
   function recalcAll() {
     recalcMix();      // dispara recalcAdditives() y recalcCosts()
-    recalcMold();
+    recalcMold();     // dispara recalcLot() (totalizador)
   }
 
   /* ============================================================
@@ -415,6 +525,20 @@
       `Total mezcla:    ${Calculator.num(mix.totalWithWaste, 1)} g`,
       `                 (base ${Calculator.num(mix.baseMass, 1)} g + merma ${Calculator.num(mix.wasteMass, 1)} g)`,
     ];
+
+    // Sección de lote (si hay totalizador activo)
+    if (state.lastLot) {
+      const qty = Math.round(parseFloat($('inLotQty').value) || 0);
+      const capLabel = state.capType === 'holes'
+        ? `${state.holesCount} huecos Ø${$('inHoleD').value || '—'} mm`
+        : 'tapa sellada';
+      lines.push('----------------------------------------');
+      lines.push(`Lote: ${qty} tapas · ${capLabel} · masa/tapa ${Calculator.num(state.lastMold ? state.lastMold.pieceMass : 0, 1)} g`);
+      lines.push(`Poliol total (A):    ${Calculator.num(state.lastLot.polyol, 1)} g`);
+      lines.push(`Isocianato total (B): ${Calculator.num(state.lastLot.iso, 1)} g`);
+      lines.push(`Mezcla total: ${Calculator.num(state.lastLot.totalWithWaste, 1)} g (merma 0.5% incl.)`);
+    }
+
     const text = lines.join('\n');
 
     try {
@@ -432,6 +556,17 @@
       ta.remove();
       toast(ok ? 'Reporte copiado.' : 'No se pudo copiar automáticamente.', ok ? 'success' : 'error');
     }
+  }
+
+  /* ============================================================
+   * CHIPS DE HUECOS (4–12)
+   * ============================================================ */
+  function paintHoleChips() {
+    document.querySelectorAll('.hole-chip').forEach((chip) => {
+      const match = parseInt(chip.dataset.holes, 10) === state.holesCount;
+      chip.classList.toggle('seg-active', match);
+      chip.setAttribute('aria-pressed', match ? 'true' : 'false');
+    });
   }
 
   /* ============================================================
@@ -459,6 +594,8 @@
       const badges = [
         r.ratioLabel || null,
         r.wastePct != null ? `merma ${Calculator.num(r.wastePct, 1)}%` : null,
+        p.capType === 'holes' ? `${p.holesCount || '—'} huecos` : (p.capType === 'sealed' ? 'sellada' : null),
+        p.lotQty > 0 ? `${p.lotQty} tapas` : null,
         r.pieceMass > 0 ? `${Calculator.num(r.pieceMass, 1)} g/tapa` : null,
         r.costPerPiece > 0 ? `$${r.costPerPiece.toFixed(4)}/tapa` : null,
       ].filter(Boolean);
@@ -554,12 +691,18 @@
       polyolG: mix && mix.valid ? mix.polyol : 0,
       isoG: mix && mix.valid ? mix.iso : 0,
       totalG: mix && mix.valid ? mix.totalWithWaste : 0,
-      wastePct: mix && mix.valid ? mix.wastePct : null,
+      wastePct: Calculator.WASTE_FIXED,
       ratioLabel: `${$('inRatioA').value || '—'}:${$('inRatioB').value || '—'}`,
       pieceMass: massPerPiece,
       costPerKg: costKg,
       costPerPiece: massPerPiece > 0 ? Calculator.costPerPiece(massPerPiece, costKg) : 0,
       shoreA: Calculator.shoreEstimate(parseFloat($('inFlex').value) || 0),
+      lot: state.lastLot ? {
+        qty: Math.round(parseFloat($('inLotQty').value) || 0),
+        polyolG: state.lastLot.polyol,
+        isoG: state.lastLot.iso,
+        totalG: state.lastLot.totalWithWaste,
+      } : null,
     };
   }
 
@@ -580,7 +723,11 @@
         pieceMass: parseFloat($('inPieceMass').value) || 0,
         ratioA: parseFloat($('inRatioA').value) || 0,
         ratioB: parseFloat($('inRatioB').value) || 0,
-        wastePct: parseFloat($('inWaste').value) || 0,
+        wastePct: Calculator.WASTE_FIXED, // fijo 0.5 %
+        capType: state.capType,
+        holesCount: state.holesCount,
+        holeDia: parseFloat($('inHoleD').value) || 0,
+        lotQty: parseFloat($('inLotQty').value) || 0,
         moldShape: state.moldShape,
         outerD: parseFloat($('inOuterD').value) || 0,
         innerD: parseFloat($('inInnerD').value) || 0,
@@ -609,7 +756,7 @@
 
   function applyRecipe(recipe) {
     const p = recipe.params || {};
-    // Modos y relación
+    // Modos
     if (p.dosMode) {
       const radio = document.querySelector(`input[name="dosMode"][value="${p.dosMode}"]`);
       if (radio) radio.checked = true;
@@ -618,12 +765,20 @@
     $('weightModeBox').classList.toggle('hidden', state.dosMode !== 'weight');
     $('piecesModeBox').classList.toggle('hidden', state.dosMode !== 'pieces');
 
+    // Tipo de tapa y huecos (recetas viejas sin estos campos → defaults)
+    state.capType = p.capType === 'holes' ? 'holes' : 'sealed';
+    const capRadio = document.querySelector(`input[name="capType"][value="${state.capType}"]`);
+    if (capRadio) capRadio.checked = true;
+    if (p.holesCount) state.holesCount = Calculator.clamp(Math.round(p.holesCount), Calculator.HOLES_MIN, Calculator.HOLES_MAX);
+
     const setVal = (id, v) => { if (v != null) $(id).value = v; };
     setVal('inTotalWeight', p.totalWeight);
     setVal('selTotalUnit', p.totalUnit);
     setVal('inPieces', p.pieces);
     setVal('inPieceMass', p.pieceMass);
-    setVal('inWaste', p.wastePct);
+    // NOTA: la merma NO se restaura desde la receta: es fija de planta (0.5 %)
+    setVal('inHoleD', p.holeDia);
+    setVal('inLotQty', p.lotQty);
     setVal('inOuterD', p.outerD);
     setVal('inInnerD', p.innerD);
     setVal('inHeight', p.height);
@@ -641,8 +796,9 @@
       const radio = document.querySelector(`input[name="moldShape"][value="${p.moldShape}"]`);
       if (radio) radio.checked = true;
       state.moldShape = p.moldShape;
-      updateMoldShapeUI();
     }
+    updateMoldShapeUI();
+    paintHoleChips();
 
     // Restaurar el chip de relación correcto
     const isCustom = ![100, 50, 40, 30].some((b) => p.ratioA === 100 && p.ratioB === b) || p.ratioA !== 100;
@@ -656,7 +812,8 @@
    * ============================================================ */
   const SESSION_FIELDS = [
     'inTotalWeight', 'selTotalUnit', 'inPieces', 'inPieceMass',
-    'inWaste', 'inOuterD', 'inInnerD', 'inHeight', 'selDimUnit',
+    'inHoleD', 'inLotQty',
+    'inOuterD', 'inInnerD', 'inHeight', 'selDimUnit',
     'inDirectVol', 'inDensity', 'inFlex',
     'inPigment', 'inCatalyst', 'inRelease',
     'inPolyolPrice', 'inIsoPrice',
@@ -667,6 +824,8 @@
     SESSION_FIELDS.forEach((id) => { data[id] = $(id).value; });
     data._dosMode = state.dosMode;
     data._moldShape = state.moldShape;
+    data._capType = state.capType;
+    data._holesCount = state.holesCount;
     data._ratioA = state.activeRatio.a;
     data._ratioB = state.activeRatio.b;
     data._ratioCustom = state.activeRatio.custom;
@@ -688,6 +847,14 @@
       const radio = document.querySelector(`input[name="moldShape"][value="${data._moldShape}"]`);
       if (radio) radio.checked = true;
       state.moldShape = data._moldShape;
+    }
+    if (data._capType) {
+      state.capType = data._capType === 'holes' ? 'holes' : 'sealed';
+      const radio = document.querySelector(`input[name="capType"][value="${state.capType}"]`);
+      if (radio) radio.checked = true;
+    }
+    if (data._holesCount) {
+      state.holesCount = Calculator.clamp(Math.round(data._holesCount), Calculator.HOLES_MIN, Calculator.HOLES_MAX);
     }
     if (data._ratioA != null) {
       state.activeRatio = { a: data._ratioA, b: data._ratioB, custom: !!data._ratioCustom };
@@ -781,13 +948,15 @@
   }
 
   /* ============================================================
-   * GEOMETRÍA DEL MOLDE — visibilidad de campos
+   * VISIBILIDAD DE CAMPOS SEGÚN GEOMETRÍA Y TIPO DE TAPA
    * ============================================================ */
   function updateMoldShapeUI() {
     const shape = state.moldShape;
     $('dimsBox').classList.toggle('hidden', shape === 'direct');
     $('directBox').classList.toggle('hidden', shape !== 'direct');
     $('inInnerDWrap').classList.toggle('hidden', shape === 'cylinder');
+    // La configuración de huecos solo aplica a geometría computable
+    $('holesBox').classList.toggle('hidden', !(state.capType === 'holes' && shape !== 'direct'));
   }
 
   /* ============================================================
@@ -804,6 +973,26 @@
       radio.addEventListener('change', () => setDosMode(radio.value));
     });
 
+    // Tipo de tapa: Sellada (original) / con Huecos
+    document.querySelectorAll('input[name="capType"]').forEach((radio) => {
+      radio.addEventListener('change', () => {
+        state.capType = radio.value;
+        updateMoldShapeUI();
+        recalcMold();
+        persistSession();
+      });
+    });
+
+    // Chips de cantidad de huecos (4–12)
+    document.querySelectorAll('.hole-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        state.holesCount = parseInt(chip.dataset.holes, 10);
+        paintHoleChips();
+        recalcMold();
+        persistSession();
+      });
+    });
+
     // Chips de relación preconfigurados
     document.querySelectorAll('.ratio-chip').forEach((chip) => {
       chip.addEventListener('click', () => setActiveRatio(parseFloat(chip.dataset.a), parseFloat(chip.dataset.b), false));
@@ -815,7 +1004,8 @@
     // Entradas de los 4 módulos → recálculo reactivo + sesión
     const recalcTriggers = [
       'inTotalWeight', 'selTotalUnit', 'inPieces', 'inPieceMass',
-      'inRatioA', 'inRatioB', 'inWaste',
+      'inRatioA', 'inRatioB',
+      'inHoleD', 'inLotQty',
       'inOuterD', 'inInnerD', 'inHeight', 'selDimUnit', 'inDirectVol',
       'inDensity', 'inFlex', 'inPigment', 'inCatalyst', 'inRelease',
       'inPolyolPrice', 'inIsoPrice',
@@ -823,7 +1013,6 @@
     let sessionTimer = null;
     const onAnyInput = () => {
       if (state.activeRatio.custom) {
-        // Mantener sincronizado el estado de relación personalizada
         state.activeRatio.a = parseFloat($('inRatioA').value) || 0;
         state.activeRatio.b = parseFloat($('inRatioB').value) || 0;
       }
@@ -861,6 +1050,22 @@
       $('inPieceMass').value = state.lastMold.pieceMass.toFixed(1);
       recalcAll();
       toast('Masa del molde aplicada.', 'success');
+    });
+
+    // Enviar lote completo al módulo de Dosificación
+    $('btnSendLot').addEventListener('click', () => {
+      const qty = Math.round(parseFloat($('inLotQty').value) || 0);
+      if (!state.lastMold || state.lastMold.pieceMass <= 0 || qty <= 0) {
+        toast('Calcula primero la masa por tapa e indica la cantidad de tapas.', 'error');
+        return;
+      }
+      $('inPieceMass').value = state.lastMold.pieceMass.toFixed(1);
+      $('inPieces').value = String(qty);
+      const radio = document.querySelector('input[name="dosMode"][value="pieces"]');
+      if (radio) radio.checked = true;
+      setDosMode('pieces');
+      toast(`Lote de ${qty} tapas enviado a Dosificación.`, 'success');
+      showPanel('dosificacion');
     });
 
     // Copiar reporte
@@ -908,6 +1113,7 @@
     $('weightModeBox').classList.toggle('hidden', state.dosMode !== 'weight');
     $('piecesModeBox').classList.toggle('hidden', state.dosMode !== 'pieces');
     updateMoldShapeUI();
+    paintHoleChips();
 
     // 3) Marcar el chip de relación activo sin recalcular aún
     const { a, b, custom } = state.activeRatio;
@@ -921,7 +1127,7 @@
     $('btnRatioCustom').classList.toggle('ratio-active', !!custom);
 
     // 4) Pintar sliders y calcular todo
-    ['inWaste', 'inDensity', 'inFlex', 'inPigment', 'inCatalyst', 'inRelease'].forEach((id) => paintRange($(id)));
+    ['inDensity', 'inFlex', 'inPigment', 'inCatalyst', 'inRelease'].forEach((id) => paintRange($(id)));
     recalcAll();
 
     // 5) Interfaz

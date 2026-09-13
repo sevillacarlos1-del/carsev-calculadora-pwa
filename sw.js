@@ -1,5 +1,8 @@
 /* ============================================================
  * CAR-SEV C.A. — Service Worker
+ * v1.1.0: bump de caché para propagar módulo de Tapas
+ * (sellada / con huecos 4–12), merma fija 0.5 % y totalizador.
+ *
  * Estrategia:
  *   · Precache en install  → assets propios + CDNs (tolerante a fallos)
  *   · Navegaciones         → Network-First con fallback a index.html
@@ -7,17 +10,22 @@
  *   · Cross-origin (CDNs)  → Cache-First con revalidación en segundo plano
  * ============================================================ */
 
-const CACHE_NAME = 'carsev-v2.0.0';
+const CACHE_NAME = 'carsev-v1.1.0';
 
 const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.json',
-  './icons/icon-192-v2.png',
+  './icons/icon.svg',
   './js/calculator.js',
   './js/storage.js',
-  './js/app.js'
-];/* ---------- INSTALL: precache tolerante ---------- */
+  './js/app.js',
+  'https://cdn.tailwindcss.com',
+  'https://unpkg.com/lucide@latest',
+  'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap'
+];
+
+/* ---------- INSTALL: precache tolerante ---------- */
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
@@ -53,7 +61,6 @@ self.addEventListener('activate', (event) => {
 // ¿La respuesta es utilizable para cachear?
 function isCacheable(response) {
   if (!response) return false;
-  // Opacas (no-cors): solo si NO son errores (los errores opacos status=0 con type 'opaque')
   if (response.type === 'opaque') return response.status === 0 || response.status === 200;
   return response.ok;
 }
