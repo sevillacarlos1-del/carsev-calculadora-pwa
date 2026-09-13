@@ -1,16 +1,11 @@
 /* ============================================================
  * CAR-SEV C.A. — Service Worker
- * v1.1.0: bump de caché para propagar módulo de Tapas
- * (sellada / con huecos 4–12), merma fija 0.5 % y totalizador.
- *
- * Estrategia:
- *   · Precache en install  → assets propios + CDNs (tolerante a fallos)
- *   · Navegaciones         → Network-First con fallback a index.html
- *   · Mismo origen         → Stale-While-Revalidate (respuesta instantánea)
- *   · Cross-origin (CDNs)  → Cache-First con revalidación en segundo plano
+ * v1.2.0: bump de caché para propagar la geometría de ventanas
+ * curvas (sectores anulares) en el módulo de Tapas. Rutas y
+ * estrategias de caché intactas.
  * ============================================================ */
 
-const CACHE_NAME = 'carsev-v1.1.0';
+const CACHE_NAME = 'carsev-v1.2.0';
 
 const PRECACHE_URLS = [
   './',

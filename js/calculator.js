@@ -3,10 +3,14 @@
  * Todos los cálculos internos trabajan en gramos y cm³.
  * Método expuesto como objeto global (script clásico, sin build).
  *
- * v1.1.0:
- *  · WASTE_FIXED: merma fija de planta en 0.5 % (protocolo).
- *  · moldVolume() soporta capType 'sealed' | 'holes' con 4–12
- *    huecos pasantes (descuento π/4 · Ø² · H por orificio).
+ * v1.2.0:
+ *  · Huecos = VENTANAS CURVAS (sectores anulares) que siguen la
+ *    circunferencia del anillo. Ya no son círculos con Ø propio.
+ *  · Ángulo automático:  paso = 360° / N
+ *                        apertura efectiva = paso − RIB_MARGIN_DEG
+ *  · Descuento de volumen:
+ *      Área ventana  = (θ_eff / 360°) · π · (Re² − Ri²)
+ *      Vol. restado  = Área ventana · Espesor(H) · N
  * ============================================================ */
 
 'use strict';
@@ -19,8 +23,9 @@ const Calculator = (() => {
   const DENSITY_MIN = 0.80;
   const DENSITY_MAX = 1.60;
   const WASTE_FIXED = 0.5;  // % FIJO de merma/seguridad (protocolo CAR-SEV). No ajustar por UI.
-  const HOLES_MIN   = 4;    // Mínimo de huecos por tapa
-  const HOLES_MAX   = 12;   // Máximo de huecos por tapa
+  const HOLES_MIN   = 4;    // Mínimo de ventanas curvas por tapa
+  const HOLES_MAX   = 12;   // Máximo de ventanas curvas por tapa
+  const RIB_MARGIN_DEG = 6; // Margen angular ESTÁNDAR por ventana para nervios/separadores (°)
 
   /* ---------- Utilidades ---------- */
 
@@ -113,18 +118,24 @@ const Calculator = (() => {
   /* ============================================================
    * MÓDULO B — Cubaje del molde (cm³) y masa por tapa
    *
-   * Anular:     V = π/4 · (DE² − DI²) · H
-   * Cilíndrico: V = π/4 · D² · H
-   * Directo:    V = valor ingresado en cm³ (se considera neto)
+   * Tapa sellada:
+   *   Anular:     V = π/4 · (DE² − DI²) · H
+   *   Cilíndrico: V = π/4 · D² · H
+   *   Directo:    V = valor ingresado en cm³ (se considera neto)
    *
-   * Tapa con huecos (capType = 'holes'): cada orificio pasante
-   * de Ø d (mm) y altura H descuenta π/4 · d² · H del cubaje.
+   * Tapa con huecos (VENTANAS CURVAS — sectores anulares):
+   *   paso angular       = 360° / N
+   *   apertura efectiva  = paso − RIB_MARGIN_DEG   (nervios)
+   *   área por ventana   = (θ_eff / 360°) · π · (Re² − Ri²)
+   *   volumen restado    = área por ventana · H · N
+   *
+   * Las ventanas requieren geometría ANULAR: el sector anular está
+   * definido por los radios del anillo (Re² − Ri²).
    * ============================================================ */
   function moldVolume({
     shape,        // 'annular' | 'cylinder' | 'direct'
     capType,      // 'sealed' | 'holes'
-    holesCount,   // 4–12
-    holeDia,      // mm
+    holesCount,   // 4–12 ventanas curvas
     outerD, innerD, height, unit,
     directVolume,
   }) {
@@ -135,6 +146,7 @@ const Calculator = (() => {
         volume: v,
         grossVolume: v,
         holesVolume: 0,
+        windows: null,
         reason: v > 0 ? '' : 'Ingresa un volumen válido.',
       };
     }
@@ -146,11 +158,11 @@ const Calculator = (() => {
     const H  = (height  || 0) * f;
 
     if (DE <= 0 || H <= 0) {
-      return { valid: false, volume: 0, grossVolume: 0, holesVolume: 0,
+      return { valid: false, volume: 0, grossVolume: 0, holesVolume: 0, windows: null,
                reason: 'El diámetro exterior y la altura deben ser mayores que cero.' };
     }
     if (shape === 'annular' && (DI <= 0 || DI >= DE)) {
-      return { valid: false, volume: 0, grossVolume: 0, holesVolume: 0,
+      return { valid: false, volume: 0, grossVolume: 0, holesVolume: 0, windows: null,
                reason: 'En molde anular, el Ø interior debe ser menor que el Ø exterior.' };
     }
 
@@ -158,26 +170,52 @@ const Calculator = (() => {
       ? (Math.PI / 4) * (DE * DE - DI * DI) * H
       : (Math.PI / 4) * DE * DE * H;
 
-    /* ---- Descuento por huecos pasantes ---- */
+    /* ---- Descuento por ventanas curvas (sectores anulares) ---- */
     let holesVolume = 0;
+    let windows = null;
+
     if (capType === 'holes') {
-      const n = clamp(Math.round(holesCount || 0), 0, 99);
-      if (n > 0) {
-        const dCm = (holeDia || 0) / 10; // mm → cm
-        if (dCm <= 0) {
-          return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0,
-                   reason: 'Ingresa el Ø de cada hueco en milímetros.' };
-        }
-        if (shape === 'annular' && dCm >= (DE - DI)) {
-          return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0,
-                   reason: `El Ø del hueco (${num(dCm * 10, 1)} mm) debe ser menor que el ancho del anillo (${num((DE - DI) * 10, 1)} mm = Ø ext − Ø int).` };
-        }
-        holesVolume = n * (Math.PI / 4) * dCm * dCm * H;
-        if (holesVolume >= gross) {
-          return { valid: false, volume: 0, grossVolume: gross, holesVolume,
-                   reason: 'Los huecos descontarían más volumen que el de la cavidad. Revisa Ø o cantidad.' };
-        }
+      // La fórmula del sector anular exige radios interior y exterior
+      if (shape !== 'annular') {
+        return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
+                 reason: 'Las ventanas curvas siguen la circunferencia del anillo: selecciona geometría Anular para el modo con huecos.' };
       }
+
+      const n = clamp(Math.round(holesCount || 0), HOLES_MIN, HOLES_MAX);
+
+      // Cálculo automático del arco: 360° repartidos entre N ventanas
+      const pitchDeg = 360 / n;
+      const effDeg   = pitchDeg - RIB_MARGIN_DEG;
+
+      if (effDeg <= 0) {
+        return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
+                 reason: `Con ${n} ventanas y nervio estándar de ${RIB_MARGIN_DEG}° no queda apertura efectiva. Reduce el nervio o la cantidad de ventanas.` };
+      }
+
+      // Área de la ventana curva: fracción angular del área total del anillo
+      const annulusArea = Math.PI * (Math.pow(DE / 2, 2) - Math.pow(DI / 2, 2));
+      const windowArea  = (effDeg / 360) * annulusArea;
+
+      // Volumen total restado = área · espesor(H) · cantidad de ventanas
+      holesVolume = windowArea * H * n;
+
+      // Guardia defensiva: el descuento jamás debe superar la cavidad
+      if (holesVolume >= gross) {
+        return { valid: false, volume: 0, grossVolume: gross, holesVolume, windows: null,
+                 reason: 'Las ventanas descontarían más volumen que el de la cavidad. Revisa dimensiones.' };
+      }
+
+      // Datos para la UI y el plano: arco medido sobre el radio medio
+      const rMid = (DE + DI) / 4;
+      windows = {
+        count: n,
+        pitchDeg,
+        ribDeg: RIB_MARGIN_DEG,
+        effDeg,
+        windowAreaCm2: windowArea,
+        arcLenCm: (effDeg * Math.PI / 180) * rMid,
+        holesVolumeCm3: holesVolume,
+      };
     }
 
     return {
@@ -185,6 +223,7 @@ const Calculator = (() => {
       volume: gross - holesVolume,
       grossVolume: gross,
       holesVolume,
+      windows,
     };
   }
 
@@ -244,6 +283,7 @@ const Calculator = (() => {
     WASTE_FIXED,
     HOLES_MIN,
     HOLES_MAX,
+    RIB_MARGIN_DEG,
     toGrams,
     roundToGrams,
     num,

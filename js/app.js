@@ -2,10 +2,12 @@
  * CAR-SEV C.A. — Controlador de interfaz y ciclo de vida PWA
  * Depende de: Calculator (js/calculator.js), Storage (js/storage.js)
  *
- * v1.1.0:
- *  · Merma fija de planta en 0.5 % (Calculator.WASTE_FIXED).
- *  · Tipo de tapa: Sellada (cálculo original) / con Huecos (4–12).
- *  · Totalizador de lote por cantidad de tapas a fabricar.
+ * v1.2.0:
+ *  · Ventanas curvas (sectores anulares) con ángulo calculado
+ *    automáticamente: paso = 360°/N, apertura = paso − nervio.
+ *  · Panel de cálculo automático del arco en el módulo de Tapas.
+ *  · Plano SVG que dibuja las ventanas curvas reales.
+ *  · Merma fija 0.5 % y totalizador de lote sin cambios.
  * ============================================================ */
 
 'use strict';
@@ -21,10 +23,10 @@
     dosMode: 'weight',          // 'weight' | 'pieces'
     moldShape: 'annular',       // 'annular' | 'cylinder' | 'direct'
     capType: 'sealed',          // 'sealed' | 'holes'
-    holesCount: 6,              // 4–12 huecos
+    holesCount: 6,              // 4–12 ventanas curvas
     activeRatio: { a: 100, b: 50, custom: false },
     lastMix: null,              // resultado del motor de cálculo (módulo 01)
-    lastMold: null,             // { volume neto, grossVolume, holesVolume, pieceMass, ... }
+    lastMold: null,             // { volume neto, grossVolume, holesVolume, windows, pieceMass, ... }
     lastLot: null,              // resultado del totalizador de lote
     deferredPrompt: null,       // evento de instalación PWA
   };
@@ -168,7 +170,7 @@
   }
 
   /* ============================================================
-   * MÓDULO B — TAPAS: cubaje, huecos y plano técnico
+   * MÓDULO B — TAPAS: cubaje, ventanas curvas y plano técnico
    * ============================================================ */
   function recalcMold() {
     const shape = state.moldShape;
@@ -176,7 +178,6 @@
       shape,
       capType: state.capType,
       holesCount: state.holesCount,
-      holeDia: parseFloat($('inHoleD').value) || 0,
       outerD: parseFloat($('inOuterD').value) || 0,
       innerD: parseFloat($('inInnerD').value) || 0,
       height: parseFloat($('inHeight').value) || 0,
@@ -199,6 +200,7 @@
       warn.textContent = result.reason;
       warn.classList.remove('hidden');
       renderMoldSVG(null);
+      updateHolesInfo(null, inputs.unit);
       updateUseMassButtons();
       recalcLot();
       return;
@@ -206,7 +208,7 @@
 
     // Nota informativa: volumen directo ya se considera neto
     if (shape === 'direct' && state.capType === 'holes') {
-      warn.textContent = 'En modo cm³ directo el volumen ingresado se considera neto: los huecos no se descuentan del cubaje.';
+      warn.textContent = 'En modo cm³ directo el volumen ingresado se considera neto: las ventanas curvas no se descuentan del cubaje.';
       warn.classList.remove('hidden');
     } else {
       warn.classList.add('hidden');
@@ -217,6 +219,7 @@
       volume: result.volume,
       grossVolume: result.grossVolume,
       holesVolume: result.holesVolume,
+      windows: result.windows,
       pieceMass: mass,
       ...inputs,
     };
@@ -224,9 +227,9 @@
     $('outVolume').textContent    = Calculator.num(result.volume, 1);
     $('outPieceMass').textContent = Calculator.num(mass, 1);
 
-    // Desglose bruto − huecos = neto (solo con huecos geométricos)
+    // Desglose bruto − ventanas = neto (solo con ventanas geométricas)
     const bd = $('volBreakdown');
-    if (state.capType === 'holes' && shape !== 'direct' && result.holesVolume > 0) {
+    if (result.windows && result.holesVolume > 0) {
       bd.classList.remove('hidden');
       $('outVolGross').textContent = Calculator.num(result.grossVolume, 1);
       $('outVolHoles').textContent = '− ' + Calculator.num(result.holesVolume, 1);
@@ -234,9 +237,32 @@
       bd.classList.add('hidden');
     }
 
+    updateHolesInfo(result.windows, inputs.unit);
     renderMoldSVG(state.lastMold);
     updateUseMassButtons();
     recalcLot();
+  }
+
+  /* ---------- Panel de cálculo automático del arco ---------- */
+  function updateHolesInfo(windows, unit) {
+    // El nervio es una constante estándar de planta: se muestra siempre
+    $('outRibDeg').textContent = Calculator.RIB_MARGIN_DEG;
+
+    if (!windows) {
+      ['outPitchDeg', 'outEffDeg', 'outArcLen', 'outWinArea', 'outHolesVolCalc']
+        .forEach((id) => ($(id).textContent = '—'));
+      return;
+    }
+
+    $('outPitchDeg').textContent = Calculator.num(windows.pitchDeg, 1);
+    $('outEffDeg').textContent   = Calculator.num(windows.effDeg, 1);
+
+    // Arco sobre el radio medio, mostrado en la unidad de dimensión activa
+    const arc = windows.arcLenCm * (unit === 'mm' ? 10 : 1);
+    $('outArcLen').textContent = `${Calculator.num(arc, 1)} ${unit}`;
+
+    $('outWinArea').textContent      = Calculator.num(windows.windowAreaCm2, 2);
+    $('outHolesVolCalc').textContent = Calculator.num(windows.holesVolumeCm3, 2);
   }
 
   function updateUseMassButtons() {
@@ -251,6 +277,25 @@
   }
 
   /* ---------- Plano técnico SVG dinámico ---------- */
+
+  // Convierte coordenada polar (ángulo en radianes) a cartesianas
+  function polar(cx, cy, r, ang) {
+    return { x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang) };
+  }
+
+  // Trayectoria de un sector anular entre ángulos a1 y a2 (radianes)
+  function sectorPath(cx, cy, rOut, rIn, a1, a2) {
+    const large = (a2 - a1) > Math.PI ? 1 : 0;
+    const p1 = polar(cx, cy, rOut, a1);
+    const p2 = polar(cx, cy, rOut, a2);
+    const p3 = polar(cx, cy, rIn, a2);
+    const p4 = polar(cx, cy, rIn, a1);
+    return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} ` +
+           `A ${rOut.toFixed(1)} ${rOut.toFixed(1)} 0 ${large} 1 ${p2.x.toFixed(1)} ${p2.y.toFixed(1)} ` +
+           `L ${p3.x.toFixed(1)} ${p3.y.toFixed(1)} ` +
+           `A ${rIn.toFixed(1)} ${rIn.toFixed(1)} 0 ${large} 0 ${p4.x.toFixed(1)} ${p4.y.toFixed(1)} Z`;
+  }
+
   function renderMoldSVG(mold) {
     const svg = $('moldSVG');
 
@@ -279,7 +324,7 @@
       return;
     }
 
-    const { shape, outerD, innerD, height, unit, capType, holesCount, holeDia } = mold;
+    const { shape, outerD, innerD, height, unit, windows } = mold;
     // Escala: diámetro ≤ 118 px, altura ≤ 66 px dentro del lienzo 340×190
     const k = Math.min(118 / outerD, 66 / height);
     const deW = outerD * k;
@@ -295,26 +340,21 @@
     const uLabel = ` ${unit}`;
 
     const dimStroke = 'stroke="#64748b" stroke-width="1" marker-start="url(#arr)" marker-end="url(#arr)"';
-    const label = (x, y, text, anchor = 'middle', fill = '#94a3b8') =>
-      `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family="IBM Plex Mono, monospace" font-size="10" fill="${fill}">${text}</text>`;
+    const label = (x, y, text, anchor = 'middle', fill = '#94a3b8', size = 10) =>
+      `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family="IBM Plex Mono, monospace" font-size="${size}" fill="${fill}">${text}</text>`;
 
     let top = '';
     let front = '';
 
-    // ===== Huecos pasantes en vista superior =====
+    // ===== Ventanas curvas (sectores anulares) en vista superior =====
     let holesSVG = '';
-    if (capType === 'holes' && holesCount > 0 && holeDia > 0) {
-      const dUnit = holeDia * (unit === 'mm' ? 1 : 0.1); // Ø del hueco en la unidad activa
-      const rHole = (dUnit * k) / 2;
-      if (rHole > 0.8) {
-        const rMid = shape === 'annular' ? (rExt + rInt) / 2 : rExt * 0.68;
-        for (let i = 0; i < holesCount; i++) {
-          const ang = (2 * Math.PI * i) / holesCount - Math.PI / 2;
-          const hx = CX + rMid * Math.cos(ang);
-          const hy = CY + rMid * Math.sin(ang);
-          holesSVG += `<circle cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="${rHole.toFixed(1)}"
-            fill="#020617" fill-opacity="0.9" stroke="#0e7490" stroke-width="1"/>`;
-        }
+    if (windows) {
+      const pitchRad = (2 * Math.PI) / windows.count;
+      const effRad   = (windows.effDeg * Math.PI) / 180;
+      for (let i = 0; i < windows.count; i++) {
+        const center = -Math.PI / 2 + i * pitchRad; // primera ventana arriba
+        holesSVG += `<path d="${sectorPath(CX, CY, rExt, rInt, center - effRad / 2, center + effRad / 2)}"
+          fill="#020617" fill-opacity="0.92" stroke="#0e7490" stroke-width="1"/>`;
       }
     }
 
@@ -337,6 +377,11 @@
     }
     top += holesSVG;
 
+    // Rótulo del patrón de ventanas
+    if (windows) {
+      top += label(CX, 31, `${windows.count} vent × ${Calculator.num(windows.effDeg, 0)}°`, 'middle', '#0e7490', 9);
+    }
+
     // Cota Ø exterior (debajo de la vista superior)
     const dimY = CY + rExt + 20;
     top += `<line x1="${CX - rExt}" y1="${dimY}" x2="${CX + rExt}" y2="${dimY}" ${dimStroke}/>`;
@@ -353,7 +398,7 @@
       front += `<line x1="${FX + gap}" y1="${FY}" x2="${FX + gap}" y2="${FY + hH}" stroke="#0e7490" stroke-width="1" stroke-dasharray="4 3"/>
                 <line x1="${FX + gap + diW}" y1="${FY}" x2="${FX + gap + diW}" y2="${FY + hH}" stroke="#0e7490" stroke-width="1" stroke-dasharray="4 3"/>`;
     }
-    // Cota de altura H
+    // Cota de altura H (espesor)
     const hx = FX + deW + 18;
     front += `<line x1="${hx}" y1="${FY}" x2="${hx}" y2="${FY + hH}" ${dimStroke}/>`;
     front += `<line x1="${FX + deW + 3}" y1="${FY}" x2="${hx + 4}" y2="${FY}" stroke="#334155" stroke-width="1"/>`;
@@ -529,8 +574,9 @@
     // Sección de lote (si hay totalizador activo)
     if (state.lastLot) {
       const qty = Math.round(parseFloat($('inLotQty').value) || 0);
-      const capLabel = state.capType === 'holes'
-        ? `${state.holesCount} huecos Ø${$('inHoleD').value || '—'} mm`
+      const w = state.lastMold ? state.lastMold.windows : null;
+      const capLabel = w
+        ? `${w.count} ventanas curvas de ${Calculator.num(w.effDeg, 1)}° (paso ${Calculator.num(w.pitchDeg, 1)}° − nervio ${w.ribDeg}°)`
         : 'tapa sellada';
       lines.push('----------------------------------------');
       lines.push(`Lote: ${qty} tapas · ${capLabel} · masa/tapa ${Calculator.num(state.lastMold ? state.lastMold.pieceMass : 0, 1)} g`);
@@ -559,7 +605,7 @@
   }
 
   /* ============================================================
-   * CHIPS DE HUECOS (4–12)
+   * CHIPS DE VENTANAS (4–12)
    * ============================================================ */
   function paintHoleChips() {
     document.querySelectorAll('.hole-chip').forEach((chip) => {
@@ -594,7 +640,7 @@
       const badges = [
         r.ratioLabel || null,
         r.wastePct != null ? `merma ${Calculator.num(r.wastePct, 1)}%` : null,
-        p.capType === 'holes' ? `${p.holesCount || '—'} huecos` : (p.capType === 'sealed' ? 'sellada' : null),
+        p.capType === 'holes' ? `${p.holesCount || '—'} ventanas curvas` : (p.capType === 'sealed' ? 'sellada' : null),
         p.lotQty > 0 ? `${p.lotQty} tapas` : null,
         r.pieceMass > 0 ? `${Calculator.num(r.pieceMass, 1)} g/tapa` : null,
         r.costPerPiece > 0 ? `$${r.costPerPiece.toFixed(4)}/tapa` : null,
@@ -697,6 +743,10 @@
       costPerKg: costKg,
       costPerPiece: massPerPiece > 0 ? Calculator.costPerPiece(massPerPiece, costKg) : 0,
       shoreA: Calculator.shoreEstimate(parseFloat($('inFlex').value) || 0),
+      windows: state.lastMold && state.lastMold.windows ? {
+        count: state.lastMold.windows.count,
+        effDeg: state.lastMold.windows.effDeg,
+      } : null,
       lot: state.lastLot ? {
         qty: Math.round(parseFloat($('inLotQty').value) || 0),
         polyolG: state.lastLot.polyol,
@@ -726,7 +776,6 @@
         wastePct: Calculator.WASTE_FIXED, // fijo 0.5 %
         capType: state.capType,
         holesCount: state.holesCount,
-        holeDia: parseFloat($('inHoleD').value) || 0,
         lotQty: parseFloat($('inLotQty').value) || 0,
         moldShape: state.moldShape,
         outerD: parseFloat($('inOuterD').value) || 0,
@@ -765,7 +814,7 @@
     $('weightModeBox').classList.toggle('hidden', state.dosMode !== 'weight');
     $('piecesModeBox').classList.toggle('hidden', state.dosMode !== 'pieces');
 
-    // Tipo de tapa y huecos (recetas viejas sin estos campos → defaults)
+    // Tipo de tapa y ventanas (recetas viejas sin estos campos → defaults)
     state.capType = p.capType === 'holes' ? 'holes' : 'sealed';
     const capRadio = document.querySelector(`input[name="capType"][value="${state.capType}"]`);
     if (capRadio) capRadio.checked = true;
@@ -777,7 +826,6 @@
     setVal('inPieces', p.pieces);
     setVal('inPieceMass', p.pieceMass);
     // NOTA: la merma NO se restaura desde la receta: es fija de planta (0.5 %)
-    setVal('inHoleD', p.holeDia);
     setVal('inLotQty', p.lotQty);
     setVal('inOuterD', p.outerD);
     setVal('inInnerD', p.innerD);
@@ -812,7 +860,7 @@
    * ============================================================ */
   const SESSION_FIELDS = [
     'inTotalWeight', 'selTotalUnit', 'inPieces', 'inPieceMass',
-    'inHoleD', 'inLotQty',
+    'inLotQty',
     'inOuterD', 'inInnerD', 'inHeight', 'selDimUnit',
     'inDirectVol', 'inDensity', 'inFlex',
     'inPigment', 'inCatalyst', 'inRelease',
@@ -955,7 +1003,7 @@
     $('dimsBox').classList.toggle('hidden', shape === 'direct');
     $('directBox').classList.toggle('hidden', shape !== 'direct');
     $('inInnerDWrap').classList.toggle('hidden', shape === 'cylinder');
-    // La configuración de huecos solo aplica a geometría computable
+    // La configuración de ventanas solo aplica a geometría computable
     $('holesBox').classList.toggle('hidden', !(state.capType === 'holes' && shape !== 'direct'));
   }
 
@@ -973,7 +1021,7 @@
       radio.addEventListener('change', () => setDosMode(radio.value));
     });
 
-    // Tipo de tapa: Sellada (original) / con Huecos
+    // Tipo de tapa: Sellada (original) / con ventanas curvas
     document.querySelectorAll('input[name="capType"]').forEach((radio) => {
       radio.addEventListener('change', () => {
         state.capType = radio.value;
@@ -983,7 +1031,7 @@
       });
     });
 
-    // Chips de cantidad de huecos (4–12)
+    // Chips de cantidad de ventanas (4–12)
     document.querySelectorAll('.hole-chip').forEach((chip) => {
       chip.addEventListener('click', () => {
         state.holesCount = parseInt(chip.dataset.holes, 10);
@@ -1005,7 +1053,7 @@
     const recalcTriggers = [
       'inTotalWeight', 'selTotalUnit', 'inPieces', 'inPieceMass',
       'inRatioA', 'inRatioB',
-      'inHoleD', 'inLotQty',
+      'inLotQty',
       'inOuterD', 'inInnerD', 'inHeight', 'selDimUnit', 'inDirectVol',
       'inDensity', 'inFlex', 'inPigment', 'inCatalyst', 'inRelease',
       'inPolyolPrice', 'inIsoPrice',
@@ -1126,8 +1174,10 @@
     });
     $('btnRatioCustom').classList.toggle('ratio-active', !!custom);
 
-    // 4) Pintar sliders y calcular todo
+    // 4) Pintar sliders, rotular el nervio estándar y calcular todo
     ['inDensity', 'inFlex', 'inPigment', 'inCatalyst', 'inRelease'].forEach((id) => paintRange($(id)));
+    $('outRibDeg').textContent = Calculator.RIB_MARGIN_DEG;
+    $('ribMarginLabel').textContent = `nervio estándar ${Calculator.RIB_MARGIN_DEG}°/ventana`;
     recalcAll();
 
     // 5) Interfaz
