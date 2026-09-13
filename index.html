@@ -388,14 +388,14 @@
       </section>
 
       <!-- ============================================= -->
-      <!-- MÓDULO 02 · TAPAS: CUBAJE, VENTANAS Y LOTE    -->
+      <!-- MÓDULO 02 · TAPAS: CUBAJE, RANURAS Y LOTE     -->
       <!-- ============================================= -->
       <section id="panel-cubaje" class="hidden">
         <div class="flex items-start gap-4 mb-6">
           <span class="font-mono text-4xl font-semibold text-slate-800 leading-none select-none">02</span>
           <div>
             <h2 class="text-xl font-bold text-slate-100">Módulo de Tapas · Cubaje y Masa</h2>
-            <p class="text-sm text-slate-500 mt-0.5">Volumen neto por tapa (sellada o con ventanas curvas en arco), masa por pieza y totalizador de lote.</p>
+            <p class="text-sm text-slate-500 mt-0.5">Volumen neto por tapa (sellada o con ranuras ovaladas concéntricas), masa por pieza y totalizador de lote.</p>
           </div>
         </div>
 
@@ -420,7 +420,7 @@
                   </div>
                 </label>
               </div>
-              <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">La tapa sellada conserva el cálculo original. Con huecos, se colan ventanas curvas en arco que siguen la circunferencia del anillo; su volumen se descuenta del cubaje.</p>
+              <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">La tapa sellada conserva el cálculo original. Con huecos, se colan ranuras ovaladas curvas (cápsulas en arco) concéntricas con la tapa; su volumen se descuenta del cubaje.</p>
             </div>
 
             <!-- 2 · Geometría del molde -->
@@ -448,10 +448,10 @@
               </div>
             </div>
 
-            <!-- Ventanas curvas (4 a 12) con cálculo automático del arco -->
+            <!-- Ranuras ovaladas curvas (4 a 12) con cálculo automático del arco -->
             <div id="holesBox" class="hidden space-y-4 border border-slate-800 rounded-xl p-4 bg-slate-950/40">
               <div>
-                <label class="block text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500 mb-2.5">Cantidad de ventanas curvas <span class="normal-case tracking-normal text-slate-600 font-normal">(4 a 12)</span></label>
+                <label class="block text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-500 mb-2.5">Cantidad de ranuras curvas <span class="normal-case tracking-normal text-slate-600 font-normal">(4 a 12)</span></label>
                 <div id="holeChips" class="flex flex-wrap gap-2">
                   <button data-holes="4"  class="hole-chip font-mono text-sm px-3.5 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-slate-200 transition-colors">4</button>
                   <button data-holes="5"  class="hole-chip font-mono text-sm px-3.5 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-slate-200 transition-colors">5</button>
@@ -465,13 +465,19 @@
                 </div>
               </div>
 
-              <!-- Cálculo automático del arco (sin campos manuales) -->
+              <div class="max-w-[180px]">
+                <label for="inSlotW" class="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 mb-2">Ancho de ranura (mm)</label>
+                <input id="inSlotW" type="number" min="0.1" step="any" inputmode="decimal" value="10"
+                  class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 font-mono tnum text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors" />
+              </div>
+
+              <!-- Cálculo automático del arco (sin campos manuales de ángulo) -->
               <div class="border border-slate-800 rounded-xl overflow-hidden">
                 <div class="px-4 py-2.5 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between gap-2">
                   <span class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-400">
                     <i data-lucide="compass" class="w-3.5 h-3.5 text-cyan-400"></i> Cálculo automático del arco
                   </span>
-                  <span id="ribMarginLabel" class="font-mono text-[10px] text-amber-400">nervio estándar 6°/ventana</span>
+                  <span id="ribMarginLabel" class="font-mono text-[10px] text-amber-400">nervio estándar 6°/ranura</span>
                 </div>
                 <div class="grid grid-cols-2 gap-x-4 gap-y-2 p-4 font-mono text-xs tnum">
                   <div class="flex justify-between gap-2">
@@ -487,11 +493,11 @@
                     <span class="text-cyan-300 font-semibold"><span id="outEffDeg">54.0</span>°</span>
                   </div>
                   <div class="flex justify-between gap-2">
-                    <span class="text-slate-500">Arco (radio medio)</span>
+                    <span class="text-slate-500">Arco de centro (Rm)</span>
                     <span class="text-slate-300"><span id="outArcLen">—</span></span>
                   </div>
                   <div class="flex justify-between gap-2">
-                    <span class="text-slate-500">Área por ventana</span>
+                    <span class="text-slate-500">Área por ranura</span>
                     <span class="text-slate-300"><span id="outWinArea">—</span> cm²</span>
                   </div>
                   <div class="flex justify-between gap-2">
@@ -502,9 +508,10 @@
               </div>
 
               <p class="text-[11px] text-slate-600 leading-relaxed">
-                Ventanas curvas en arco que siguen la circunferencia del anillo. La app divide 360° entre el número de
-                ventanas y descuenta el margen estándar de nervios (6°) para obtener la apertura efectiva de cada ventana.
-                Descuento: V = (θ<sub>eff</sub>/360) · π · (Re² − Ri²) · H · N.
+                Ranuras ovaladas concéntricas (cápsulas en arco) con extremos semicirculares, trazadas sobre el radio
+                medio Rm del anillo y a ancho constante w. La app divide 360° entre el número de ranuras y descuenta el
+                nervio estándar (6°) para la apertura punta-a-punta. Descuento exacto:
+                A = θ<sub>c</sub>·Rm·w + π·(w/2)², con θ<sub>c</sub> = θ<sub>eff</sub> − 2·arcsen(w/2Rm); V = A · H · N.
               </p>
             </div>
 
@@ -817,10 +824,10 @@
           <i data-lucide="triangle-alert" class="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500/70"></i>
           <span>
             <strong class="text-slate-500">Nota técnica:</strong> el valor Shore A mostrado es una interpolación referencial;
-            la dureza real depende del índice NCO, temperatura y curado. Las ventanas curvas se descuentan como sectores
-            anulares: V = (θ/360) · π · (Re² − Ri²) · H · N, con nervio estándar de 6° por ventana. El isocianato es un
-            sensitizador respiratorio: manipular con EPP completo en área ventilada. Validar toda formulación con prueba
-            de laboratorio antes de producción.
+            la dureza real depende del índice NCO, temperatura y curado. Las ranuras curvas se descuentan como cápsulas
+            concéntricas de ancho constante: A = θc·Rm·w + π·(w/2)²; V = A·H·N, con nervio estándar de 6° por ranura.
+            El isocianato es un sensitizador respiratorio: manipular con EPP completo en área ventilada. Validar toda
+            formulación con prueba de laboratorio antes de producción.
           </span>
         </p>
         <p class="mt-3 text-slate-700">CAR-SEV C.A. · Fabricación de tapas y bases para filtros de aire automotrices e industriales.</p>

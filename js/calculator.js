@@ -3,14 +3,16 @@
  * Todos los cálculos internos trabajan en gramos y cm³.
  * Método expuesto como objeto global (script clásico, sin build).
  *
- * v1.2.0:
- *  · Huecos = VENTANAS CURVAS (sectores anulares) que siguen la
- *    circunferencia del anillo. Ya no son círculos con Ø propio.
- *  · Ángulo automático:  paso = 360° / N
- *                        apertura efectiva = paso − RIB_MARGIN_DEG
- *  · Descuento de volumen:
- *      Área ventana  = (θ_eff / 360°) · π · (Re² − Ri²)
- *      Vol. restado  = Área ventana · Espesor(H) · N
+ * v1.2.1:
+ *  · Huecos = RANURAS OVALADAS CURVAS (cápsulas en arco):
+ *    canales concéntricos de ancho constante w trazados sobre el
+ *    radio medio Rm del anillo, con extremos semicirculares.
+ *  · Geometría exacta de la cápsula:
+ *      apertura punta-a-punta  θeff = 360°/N − nervio
+ *      span central            θc   = θeff − 2·arcsen(w / 2Rm)
+ *      área por ranura         A    = θc·Rm·w + π·(w/2)²
+ *      volumen restado         V    = A · H · N
+ *  · Merma fija 0.5 % y Tapa Sellada sin cambios.
  * ============================================================ */
 
 'use strict';
@@ -23,9 +25,9 @@ const Calculator = (() => {
   const DENSITY_MIN = 0.80;
   const DENSITY_MAX = 1.60;
   const WASTE_FIXED = 0.5;  // % FIJO de merma/seguridad (protocolo CAR-SEV). No ajustar por UI.
-  const HOLES_MIN   = 4;    // Mínimo de ventanas curvas por tapa
-  const HOLES_MAX   = 12;   // Máximo de ventanas curvas por tapa
-  const RIB_MARGIN_DEG = 6; // Margen angular ESTÁNDAR por ventana para nervios/separadores (°)
+  const HOLES_MIN   = 4;    // Mínimo de ranuras curvas por tapa
+  const HOLES_MAX   = 12;   // Máximo de ranuras curvas por tapa
+  const RIB_MARGIN_DEG = 6; // Margen angular ESTÁNDAR entre puntas de ranuras para nervios (°)
 
   /* ---------- Utilidades ---------- */
 
@@ -123,19 +125,27 @@ const Calculator = (() => {
    *   Cilíndrico: V = π/4 · D² · H
    *   Directo:    V = valor ingresado en cm³ (se considera neto)
    *
-   * Tapa con huecos (VENTANAS CURVAS — sectores anulares):
-   *   paso angular       = 360° / N
-   *   apertura efectiva  = paso − RIB_MARGIN_DEG   (nervios)
-   *   área por ventana   = (θ_eff / 360°) · π · (Re² − Ri²)
-   *   volumen restado    = área por ventana · H · N
+   * Tapa con huecos (RANURAS OVALADAS CURVAS — cápsulas en arco):
+   *   Cada ranura es un canal concéntrico de ancho constante w,
+   *   trazado sobre el radio medio Rm = (DE + DI) / 4, con
+   *   extremos semicirculares de radio rc = w/2.
    *
-   * Las ventanas requieren geometría ANULAR: el sector anular está
-   * definido por los radios del anillo (Re² − Ri²).
+   *   paso angular (centro a centro)  = 360° / N
+   *   apertura punta-a-punta          θeff = paso − nervio
+   *   span central del arco           θc   = θeff − 2·arcsen(rc / Rm)
+   *   área del tramo en arco          = θc · Rm · w
+   *   área de los extremos redondeados = π · rc²  (dos semicírculos)
+   *   área total por ranura           = θc·Rm·w + π·rc²
+   *   volumen restado                 = área · H · N
+   *
+   * Las ranuras requieren geometría ANULAR: el canal vive entre
+   * los radios interior y exterior del anillo.
    * ============================================================ */
   function moldVolume({
     shape,        // 'annular' | 'cylinder' | 'direct'
     capType,      // 'sealed' | 'holes'
-    holesCount,   // 4–12 ventanas curvas
+    holesCount,   // 4–12 ranuras curvas
+    slotWidth,    // ancho de ranura w (mm)
     outerD, innerD, height, unit,
     directVolume,
   }) {
@@ -170,50 +180,80 @@ const Calculator = (() => {
       ? (Math.PI / 4) * (DE * DE - DI * DI) * H
       : (Math.PI / 4) * DE * DE * H;
 
-    /* ---- Descuento por ventanas curvas (sectores anulares) ---- */
+    /* ---- Descuento por ranuras curvas (cápsulas en arco) ---- */
     let holesVolume = 0;
     let windows = null;
 
     if (capType === 'holes') {
-      // La fórmula del sector anular exige radios interior y exterior
+      // El canal concéntrico exige radios interior y exterior
       if (shape !== 'annular') {
         return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
-                 reason: 'Las ventanas curvas siguen la circunferencia del anillo: selecciona geometría Anular para el modo con huecos.' };
+                 reason: 'Las ranuras curvas siguen la circunferencia del anillo: selecciona geometría Anular para el modo con huecos.' };
       }
 
       const n = clamp(Math.round(holesCount || 0), HOLES_MIN, HOLES_MAX);
 
-      // Cálculo automático del arco: 360° repartidos entre N ventanas
+      const wMm = Math.max(0, slotWidth || 0);
+      if (wMm <= 0) {
+        return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
+                 reason: 'Ingresa el ancho de cada ranura curva en milímetros.' };
+      }
+
+      const wCm = wMm / 10;
+      const wMaxCm = DE - DI; // ancho radial disponible del anillo
+      if (wCm >= wMaxCm) {
+        return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
+                 reason: `El ancho de ranura (${num(wMm, 1)} mm) debe ser menor que el ancho del anillo (${num(wMaxCm * 10, 1)} mm = Ø ext − Ø int).` };
+      }
+
+      // Cálculo automático del arco: 360° repartidos entre N ranuras
       const pitchDeg = 360 / n;
       const effDeg   = pitchDeg - RIB_MARGIN_DEG;
 
       if (effDeg <= 0) {
         return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
-                 reason: `Con ${n} ventanas y nervio estándar de ${RIB_MARGIN_DEG}° no queda apertura efectiva. Reduce el nervio o la cantidad de ventanas.` };
+                 reason: `Con ${n} ranuras y nervio estándar de ${RIB_MARGIN_DEG}° no queda apertura efectiva. Reduce el nervio o la cantidad de ranuras.` };
       }
 
-      // Área de la ventana curva: fracción angular del área total del anillo
-      const annulusArea = Math.PI * (Math.pow(DE / 2, 2) - Math.pow(DI / 2, 2));
-      const windowArea  = (effDeg / 360) * annulusArea;
+      const Rm = (DE + DI) / 4;  // radio medio del anillo (cm): traza del canal
+      const rc = wCm / 2;        // radio de los extremos semicirculares (cm)
 
-      // Volumen total restado = área · espesor(H) · cantidad de ventanas
+      // El span central se recorta por los semicírculos de las puntas:
+      // cada punta subtiende arcsen(rc/Rm) visto desde el centro.
+      const effRad      = (effDeg * Math.PI) / 180;
+      const thetaCenter = effRad - 2 * Math.asin(Math.min(1, rc / Rm));
+
+      if (thetaCenter <= 0) {
+        return { valid: false, volume: 0, grossVolume: gross, holesVolume: 0, windows: null,
+                 reason: `Con ${n} ranuras (apertura ${num(effDeg, 1)}°), un ancho de ${num(wMm, 1)} mm hace solapar los extremos redondeados. Reduce el ancho de la ranura o usa menos ranuras.` };
+      }
+
+      // Área EXACTA de la cápsula en arco:
+      // tramo recto-en-arco (θc·Rm·w) + dos semicírculos (π·rc²)
+      const windowArea = Rm * wCm * thetaCenter + Math.PI * rc * rc;
+
+      // Volumen total restado = área · espesor(H) · cantidad de ranuras
       holesVolume = windowArea * H * n;
 
       // Guardia defensiva: el descuento jamás debe superar la cavidad
       if (holesVolume >= gross) {
         return { valid: false, volume: 0, grossVolume: gross, holesVolume, windows: null,
-                 reason: 'Las ventanas descontarían más volumen que el de la cavidad. Revisa dimensiones.' };
+                 reason: 'Las ranuras descontarían más volumen que el de la cavidad. Revisa dimensiones.' };
       }
 
-      // Datos para la UI y el plano: arco medido sobre el radio medio
-      const rMid = (DE + DI) / 4;
+      // Datos para la UI y el plano
       windows = {
         count: n,
         pitchDeg,
         ribDeg: RIB_MARGIN_DEG,
         effDeg,
+        slotWidthCm: wCm,
+        centerRadiusCm: Rm,
+        capRadiusCm: rc,
+        thetaCenterRad: thetaCenter,
+        arcLenCm: thetaCenter * Rm,      // longitud del arco de centro del canal
         windowAreaCm2: windowArea,
-        arcLenCm: (effDeg * Math.PI / 180) * rMid,
+        windowVolCm3: windowArea * H,
         holesVolumeCm3: holesVolume,
       };
     }

@@ -1,11 +1,11 @@
 /* ============================================================
  * CAR-SEV C.A. — Service Worker
- * v1.2.0: bump de caché para propagar la geometría de ventanas
- * curvas (sectores anulares) en el módulo de Tapas. Rutas y
- * estrategias de caché intactas.
+ * v1.2.1: bump de caché para propagar la geometría de ranuras
+ * ovaladas curvas (cápsulas en arco con puntas redondeadas).
+ * Rutas y estrategias de caché intactas.
  * ============================================================ */
 
-const CACHE_NAME = 'carsev-v1.2.0';
+const CACHE_NAME = 'carsev-v1.2.1';
 
 const PRECACHE_URLS = [
   './',

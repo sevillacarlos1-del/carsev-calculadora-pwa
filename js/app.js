@@ -2,11 +2,11 @@
  * CAR-SEV C.A. — Controlador de interfaz y ciclo de vida PWA
  * Depende de: Calculator (js/calculator.js), Storage (js/storage.js)
  *
- * v1.2.0:
- *  · Ventanas curvas (sectores anulares) con ángulo calculado
- *    automáticamente: paso = 360°/N, apertura = paso − nervio.
- *  · Panel de cálculo automático del arco en el módulo de Tapas.
- *  · Plano SVG que dibuja las ventanas curvas reales.
+ * v1.2.1:
+ *  · Ranuras ovaladas curvas (cápsulas en arco) con extremos
+ *    semicirculares: trazador de path capsulePath() en el plano.
+ *  · Cota de ancho w sobre la primera ranura en vista superior.
+ *  · Ancho de ranura (mm) como parámetro (sesión + recetas).
  *  · Merma fija 0.5 % y totalizador de lote sin cambios.
  * ============================================================ */
 
@@ -23,7 +23,7 @@
     dosMode: 'weight',          // 'weight' | 'pieces'
     moldShape: 'annular',       // 'annular' | 'cylinder' | 'direct'
     capType: 'sealed',          // 'sealed' | 'holes'
-    holesCount: 6,              // 4–12 ventanas curvas
+    holesCount: 6,              // 4–12 ranuras curvas
     activeRatio: { a: 100, b: 50, custom: false },
     lastMix: null,              // resultado del motor de cálculo (módulo 01)
     lastMold: null,             // { volume neto, grossVolume, holesVolume, windows, pieceMass, ... }
@@ -170,7 +170,7 @@
   }
 
   /* ============================================================
-   * MÓDULO B — TAPAS: cubaje, ventanas curvas y plano técnico
+   * MÓDULO B — TAPAS: cubaje, ranuras curvas y plano técnico
    * ============================================================ */
   function recalcMold() {
     const shape = state.moldShape;
@@ -178,6 +178,7 @@
       shape,
       capType: state.capType,
       holesCount: state.holesCount,
+      slotWidth: parseFloat($('inSlotW').value) || 0,
       outerD: parseFloat($('inOuterD').value) || 0,
       innerD: parseFloat($('inInnerD').value) || 0,
       height: parseFloat($('inHeight').value) || 0,
@@ -208,7 +209,7 @@
 
     // Nota informativa: volumen directo ya se considera neto
     if (shape === 'direct' && state.capType === 'holes') {
-      warn.textContent = 'En modo cm³ directo el volumen ingresado se considera neto: las ventanas curvas no se descuentan del cubaje.';
+      warn.textContent = 'En modo cm³ directo el volumen ingresado se considera neto: las ranuras curvas no se descuentan del cubaje.';
       warn.classList.remove('hidden');
     } else {
       warn.classList.add('hidden');
@@ -227,7 +228,7 @@
     $('outVolume').textContent    = Calculator.num(result.volume, 1);
     $('outPieceMass').textContent = Calculator.num(mass, 1);
 
-    // Desglose bruto − ventanas = neto (solo con ventanas geométricas)
+    // Desglose bruto − ranuras = neto (solo con ranuras geométricas)
     const bd = $('volBreakdown');
     if (result.windows && result.holesVolume > 0) {
       bd.classList.remove('hidden');
@@ -257,7 +258,7 @@
     $('outPitchDeg').textContent = Calculator.num(windows.pitchDeg, 1);
     $('outEffDeg').textContent   = Calculator.num(windows.effDeg, 1);
 
-    // Arco sobre el radio medio, mostrado en la unidad de dimensión activa
+    // Arco de centro del canal (sobre Rm), en la unidad de dimensión activa
     const arc = windows.arcLenCm * (unit === 'mm' ? 10 : 1);
     $('outArcLen').textContent = `${Calculator.num(arc, 1)} ${unit}`;
 
@@ -283,17 +284,37 @@
     return { x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang) };
   }
 
-  // Trayectoria de un sector anular entre ángulos a1 y a2 (radianes)
-  function sectorPath(cx, cy, rOut, rIn, a1, a2) {
-    const large = (a2 - a1) > Math.PI ? 1 : 0;
-    const p1 = polar(cx, cy, rOut, a1);
-    const p2 = polar(cx, cy, rOut, a2);
-    const p3 = polar(cx, cy, rIn, a2);
-    const p4 = polar(cx, cy, rIn, a1);
-    return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} ` +
-           `A ${rOut.toFixed(1)} ${rOut.toFixed(1)} 0 ${large} 1 ${p2.x.toFixed(1)} ${p2.y.toFixed(1)} ` +
-           `L ${p3.x.toFixed(1)} ${p3.y.toFixed(1)} ` +
-           `A ${rIn.toFixed(1)} ${rIn.toFixed(1)} 0 ${large} 0 ${p4.x.toFixed(1)} ${p4.y.toFixed(1)} Z`;
+  /**
+   * Trazador de RANURA OVALADA CURVA (cápsula en arco):
+   * canal de ancho constante 2·rc centrado en el radio rMid,
+   * con extremos semicirculares de radio rc.
+   *
+   * Path: arco exterior → semicírculo de punta (a2) →
+   *       arco interior (regreso) → semicírculo de punta (a1).
+   *
+   * @param {number} cx,cy      centro de la tapa en px
+   * @param {number} rMid       radio medio del canal (px)
+   * @param {number} rc         radio de los extremos (px)
+   * @param {number} centerAng  ángulo del centro de la ranura (rad)
+   * @param {number} thetaC     span angular central (rad, entre centros de puntas)
+   */
+  function capsulePath(cx, cy, rMid, rc, centerAng, thetaC) {
+    const rOut = rMid + rc;
+    const rIn  = rMid - rc;
+    const a1 = centerAng - thetaC / 2;
+    const a2 = centerAng + thetaC / 2;
+    const pA = polar(cx, cy, rOut, a1);
+    const pB = polar(cx, cy, rOut, a2);
+    const pC = polar(cx, cy, rIn,  a2);
+    const pD = polar(cx, cy, rIn,  a1);
+    const large = thetaC > Math.PI ? 1 : 0;
+    const pt = (p) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+    const rr = (v) => v.toFixed(1);
+    return `M ${pt(pA)} ` +
+           `A ${rr(rOut)} ${rr(rOut)} 0 ${large} 1 ${pt(pB)} ` +
+           `A ${rr(rc)} ${rr(rc)} 0 0 1 ${pt(pC)} ` +
+           `A ${rr(rIn)} ${rr(rIn)} 0 ${large} 0 ${pt(pD)} ` +
+           `A ${rr(rc)} ${rr(rc)} 0 0 1 ${pt(pA)} Z`;
   }
 
   function renderMoldSVG(mold) {
@@ -346,16 +367,41 @@
     let top = '';
     let front = '';
 
-    // ===== Ventanas curvas (sectores anulares) en vista superior =====
+    // ===== Ranuras ovaladas curvas (cápsulas) en vista superior =====
     let holesSVG = '';
+    let widthDim = '';
     if (windows) {
+      // Radios del canal en px, coherentes con la escala del anillo
+      const rMidPx = ((outerD + innerD) / 4) * k;                       // Rm
+      const wUnit  = windows.slotWidthCm * (unit === 'mm' ? 10 : 1);    // mm → unidad activa
+      const rcPx   = (wUnit / 2) * k;                                   // radio de puntas
+
       const pitchRad = (2 * Math.PI) / windows.count;
-      const effRad   = (windows.effDeg * Math.PI) / 180;
       for (let i = 0; i < windows.count; i++) {
-        const center = -Math.PI / 2 + i * pitchRad; // primera ventana arriba
-        holesSVG += `<path d="${sectorPath(CX, CY, rExt, rInt, center - effRad / 2, center + effRad / 2)}"
+        const center = -Math.PI / 2 + i * pitchRad; // primera ranura arriba
+        holesSVG += `<path d="${capsulePath(CX, CY, rMidPx, rcPx, center, windows.thetaCenterRad)}"
           fill="#020617" fill-opacity="0.92" stroke="#0e7490" stroke-width="1"/>`;
       }
+
+      // Cota de ancho w sobre la primera ranura (línea radial con topes)
+      if (rcPx > 5) {
+        const aDim = -Math.PI / 2 - windows.thetaCenterRad / 2; // centro de la punta inicial
+        const d1 = polar(CX, CY, rMidPx - rcPx, aDim);
+        const d2 = polar(CX, CY, rMidPx + rcPx, aDim);
+        const tx = 3 * (-Math.sin(aDim));
+        const ty = 3 * Math.cos(aDim);
+        const tick = (p) =>
+          `<line x1="${(p.x - tx).toFixed(1)}" y1="${(p.y - ty).toFixed(1)}" x2="${(p.x + tx).toFixed(1)}" y2="${(p.y + ty).toFixed(1)}" stroke="#67e8f9" stroke-width="1"/>`;
+        const mid = polar(CX, CY, rMidPx, aDim);
+        widthDim =
+          `<line x1="${d1.x.toFixed(1)}" y1="${d1.y.toFixed(1)}" x2="${d2.x.toFixed(1)}" y2="${d2.y.toFixed(1)}" stroke="#67e8f9" stroke-width="1"/>` +
+          tick(d1) + tick(d2) +
+          `<text x="${mid.x.toFixed(1)}" y="${(mid.y + 3).toFixed(1)}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#67e8f9" stroke="#020617" stroke-width="3" paint-order="stroke">w</text>`;
+      }
+
+      // Rótulo del patrón de ranuras
+      const wShow = windows.slotWidthCm * (unit === 'mm' ? 10 : 1);
+      top += label(CX, 31, `${windows.count} ran · w${Calculator.num(wShow, 0)}${uLabel} · ${Calculator.num(windows.effDeg, 0)}°`, 'middle', '#0e7490', 9);
     }
 
     // ===== Vista superior =====
@@ -376,11 +422,7 @@
               <line x1="${CX - rExt}" y1="${CY}" x2="${CX + rExt}" y2="${CY}" stroke="#0e7490" stroke-width="1" stroke-dasharray="4 3"/>`;
     }
     top += holesSVG;
-
-    // Rótulo del patrón de ventanas
-    if (windows) {
-      top += label(CX, 31, `${windows.count} vent × ${Calculator.num(windows.effDeg, 0)}°`, 'middle', '#0e7490', 9);
-    }
+    top += widthDim;
 
     // Cota Ø exterior (debajo de la vista superior)
     const dimY = CY + rExt + 20;
@@ -576,7 +618,7 @@
       const qty = Math.round(parseFloat($('inLotQty').value) || 0);
       const w = state.lastMold ? state.lastMold.windows : null;
       const capLabel = w
-        ? `${w.count} ventanas curvas de ${Calculator.num(w.effDeg, 1)}° (paso ${Calculator.num(w.pitchDeg, 1)}° − nervio ${w.ribDeg}°)`
+        ? `${w.count} ranuras curvas de ${Calculator.num(w.slotWidthCm * 10, 1)} mm (apertura ${Calculator.num(w.effDeg, 1)}° = paso ${Calculator.num(w.pitchDeg, 1)}° − nervio ${w.ribDeg}°)`
         : 'tapa sellada';
       lines.push('----------------------------------------');
       lines.push(`Lote: ${qty} tapas · ${capLabel} · masa/tapa ${Calculator.num(state.lastMold ? state.lastMold.pieceMass : 0, 1)} g`);
@@ -605,7 +647,7 @@
   }
 
   /* ============================================================
-   * CHIPS DE VENTANAS (4–12)
+   * CHIPS DE RANURAS (4–12)
    * ============================================================ */
   function paintHoleChips() {
     document.querySelectorAll('.hole-chip').forEach((chip) => {
@@ -640,7 +682,8 @@
       const badges = [
         r.ratioLabel || null,
         r.wastePct != null ? `merma ${Calculator.num(r.wastePct, 1)}%` : null,
-        p.capType === 'holes' ? `${p.holesCount || '—'} ventanas curvas` : (p.capType === 'sealed' ? 'sellada' : null),
+        p.capType === 'holes' ? `${p.holesCount || '—'} ranuras curvas` : (p.capType === 'sealed' ? 'sellada' : null),
+        p.slotWidth > 0 ? `w ${p.slotWidth} mm` : null,
         p.lotQty > 0 ? `${p.lotQty} tapas` : null,
         r.pieceMass > 0 ? `${Calculator.num(r.pieceMass, 1)} g/tapa` : null,
         r.costPerPiece > 0 ? `$${r.costPerPiece.toFixed(4)}/tapa` : null,
@@ -746,6 +789,7 @@
       windows: state.lastMold && state.lastMold.windows ? {
         count: state.lastMold.windows.count,
         effDeg: state.lastMold.windows.effDeg,
+        slotWidthMm: +(state.lastMold.windows.slotWidthCm * 10).toFixed(1),
       } : null,
       lot: state.lastLot ? {
         qty: Math.round(parseFloat($('inLotQty').value) || 0),
@@ -776,6 +820,7 @@
         wastePct: Calculator.WASTE_FIXED, // fijo 0.5 %
         capType: state.capType,
         holesCount: state.holesCount,
+        slotWidth: parseFloat($('inSlotW').value) || 0,
         lotQty: parseFloat($('inLotQty').value) || 0,
         moldShape: state.moldShape,
         outerD: parseFloat($('inOuterD').value) || 0,
@@ -814,7 +859,7 @@
     $('weightModeBox').classList.toggle('hidden', state.dosMode !== 'weight');
     $('piecesModeBox').classList.toggle('hidden', state.dosMode !== 'pieces');
 
-    // Tipo de tapa y ventanas (recetas viejas sin estos campos → defaults)
+    // Tipo de tapa y ranuras (recetas viejas sin estos campos → defaults)
     state.capType = p.capType === 'holes' ? 'holes' : 'sealed';
     const capRadio = document.querySelector(`input[name="capType"][value="${state.capType}"]`);
     if (capRadio) capRadio.checked = true;
@@ -826,6 +871,7 @@
     setVal('inPieces', p.pieces);
     setVal('inPieceMass', p.pieceMass);
     // NOTA: la merma NO se restaura desde la receta: es fija de planta (0.5 %)
+    setVal('inSlotW', p.slotWidth);
     setVal('inLotQty', p.lotQty);
     setVal('inOuterD', p.outerD);
     setVal('inInnerD', p.innerD);
@@ -860,7 +906,7 @@
    * ============================================================ */
   const SESSION_FIELDS = [
     'inTotalWeight', 'selTotalUnit', 'inPieces', 'inPieceMass',
-    'inLotQty',
+    'inSlotW', 'inLotQty',
     'inOuterD', 'inInnerD', 'inHeight', 'selDimUnit',
     'inDirectVol', 'inDensity', 'inFlex',
     'inPigment', 'inCatalyst', 'inRelease',
@@ -1003,7 +1049,7 @@
     $('dimsBox').classList.toggle('hidden', shape === 'direct');
     $('directBox').classList.toggle('hidden', shape !== 'direct');
     $('inInnerDWrap').classList.toggle('hidden', shape === 'cylinder');
-    // La configuración de ventanas solo aplica a geometría computable
+    // La configuración de ranuras solo aplica a geometría computable
     $('holesBox').classList.toggle('hidden', !(state.capType === 'holes' && shape !== 'direct'));
   }
 
@@ -1021,7 +1067,7 @@
       radio.addEventListener('change', () => setDosMode(radio.value));
     });
 
-    // Tipo de tapa: Sellada (original) / con ventanas curvas
+    // Tipo de tapa: Sellada (original) / con ranuras curvas
     document.querySelectorAll('input[name="capType"]').forEach((radio) => {
       radio.addEventListener('change', () => {
         state.capType = radio.value;
@@ -1031,7 +1077,7 @@
       });
     });
 
-    // Chips de cantidad de ventanas (4–12)
+    // Chips de cantidad de ranuras (4–12)
     document.querySelectorAll('.hole-chip').forEach((chip) => {
       chip.addEventListener('click', () => {
         state.holesCount = parseInt(chip.dataset.holes, 10);
@@ -1053,7 +1099,7 @@
     const recalcTriggers = [
       'inTotalWeight', 'selTotalUnit', 'inPieces', 'inPieceMass',
       'inRatioA', 'inRatioB',
-      'inLotQty',
+      'inSlotW', 'inLotQty',
       'inOuterD', 'inInnerD', 'inHeight', 'selDimUnit', 'inDirectVol',
       'inDensity', 'inFlex', 'inPigment', 'inCatalyst', 'inRelease',
       'inPolyolPrice', 'inIsoPrice',
@@ -1177,7 +1223,7 @@
     // 4) Pintar sliders, rotular el nervio estándar y calcular todo
     ['inDensity', 'inFlex', 'inPigment', 'inCatalyst', 'inRelease'].forEach((id) => paintRange($(id)));
     $('outRibDeg').textContent = Calculator.RIB_MARGIN_DEG;
-    $('ribMarginLabel').textContent = `nervio estándar ${Calculator.RIB_MARGIN_DEG}°/ventana`;
+    $('ribMarginLabel').textContent = `nervio estándar ${Calculator.RIB_MARGIN_DEG}°/ranura`;
     recalcAll();
 
     // 5) Interfaz
